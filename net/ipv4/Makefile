@@ -2,6 +2,8 @@
 #
 # Makefile for the Linux TCP/IP (INET) layer.
 #
+CFLAGS_ip_sockglue.o += -O
+CFLAGS_ping.o += -O
 
 obj-y     := route.o inetpeer.o protocol.o \
 	     ip_input.o ip_fragment.o ip_forward.o ip_options.o \

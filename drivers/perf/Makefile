@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
+CFLAGS_arm_spe_pmu.o += -O
+CFLAGS_arm_pmuv3.o += -O
+
 obj-$(CONFIG_ARM_CCI_PMU) += arm-cci.o
 obj-$(CONFIG_ARM_CCN) += arm-ccn.o
 obj-$(CONFIG_ARM_CMN) += arm-cmn.o

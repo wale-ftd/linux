@@ -25,6 +25,33 @@ KASAN_SANITIZE_stacktrace.o := n
 KCOV_INSTRUMENT_entry-common.o := n
 KCOV_INSTRUMENT_idle.o := n
 
+CFLAGS_fpsimd.o += -O
+CFLAGS_entry-common.o += -O
+CFLAGS_process.o += -O
+CFLAGS_ptrace.o += -O
+CFLAGS_signal.o += -O
+CFLAGS_traps.o += -O
+CFLAGS_cpuinfo.o += -O
+CFLAGS_cpufeature.o += -O
+CFLAGS_alternative.o += -O
+CFLAGS_smp.o += -O
+CFLAGS_syscall.o += -O
+CFLAGS_proton-pack.o += -O
+CFLAGS_signal32.o += -O
+CFLAGS_sys_compat.o += -O
+CFLAGS_perf_regs.o += -O
+CFLAGS_perf_event.o += -O
+CFLAGS_suspend.o += -O
+CFLAGS_elfcore.o += -O
+CFLAGS_hibernate.o += -O
+CFLAGS_crash_core.o += -O
+CFLAGS_pointer_auth.o += -O
+CFLAGS_mte.o += -O
+CFLAGS_irq.o += -O
+CFLAGS_module.o += -O
+CFLAGS_module-plts.o += -O
+CFLAGS_vmcore_info.o += -O
+
 # Object file lists.
 obj-y			:= debug-monitors.o entry.o irq.o fpsimd.o		\
 			   entry-common.o entry-fpsimd.o process.o ptrace.o	\

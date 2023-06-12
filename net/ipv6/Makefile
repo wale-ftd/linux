@@ -2,6 +2,7 @@
 #
 # Makefile for the Linux TCP/IP (INET6) layer.
 #
+CFLAGS_datagram.o += -O
 
 obj-$(CONFIG_IPV6) += ipv6.o
 

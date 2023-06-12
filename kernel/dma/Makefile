@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
+CFLAGS_direct.o += -O
+CFLAGS_pool.o += -O
 
 obj-$(CONFIG_HAS_DMA)			+= mapping.o direct.o
 obj-$(CONFIG_DMA_OPS_HELPERS)		+= ops_helpers.o

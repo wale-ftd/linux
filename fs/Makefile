@@ -5,6 +5,8 @@
 # 14 Sep 2000, Christoph Hellwig <hch@infradead.org>
 # Rewritten to use lists instead of if-statements.
 # 
+CFLAGS_binfmt_elf.o += -O
+CFLAGS_compat_binfmt_elf.o += -O
 
 
 obj-y :=	open.o read_write.o file_table.o super.o \

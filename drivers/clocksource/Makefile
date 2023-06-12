@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
+CFLAGS_arm_arch_timer.o += -O
+
 obj-$(CONFIG_TIMER_OF)		+= timer-of.o
 obj-$(CONFIG_TIMER_PROBE)	+= timer-probe.o
 obj-$(CONFIG_ATMEL_PIT)		+= timer-atmel-pit.o

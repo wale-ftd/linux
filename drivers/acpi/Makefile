@@ -3,6 +3,8 @@
 # Makefile for the Linux ACPI interpreter
 #
 
+CFLAGS_scan.o += -O
+
 ccflags-$(CONFIG_ACPI_DEBUG)	+= -DACPI_DEBUG_OUTPUT
 
 #
