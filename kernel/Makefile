@@ -2,6 +2,7 @@
 #
 # Makefile for the linux kernel.
 #
+CFLAGS_fork.o += -O
 
 obj-y     = fork.o exec_domain.o panic.o \
 	    cpu.o exit.o softirq.o resource.o \

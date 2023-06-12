@@ -1,4 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
+CFLAGS_fault.o += -O
+CFLAGS_copypage.o += -O
+CFLAGS_flush.o += -O
+CFLAGS_mmap.o += -O
+CFLAGS_mmu.o += -O
+CFLAGS_context.o += -O
+CFLAGS_hugetlbpage.o += -O
+
 obj-y				:= dma-mapping.o extable.o fault.o init.o \
 				   cache.o copypage.o flush.o \
 				   ioremap.o mmap.o pgd.o mmu.o \
