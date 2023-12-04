@@ -364,6 +364,7 @@ enum lruvec_flags {
 struct lruvec;
 struct page_vma_mapped_walk;
 
+/* 存在 folio->flags 里的 gen 值是从 1 开始的 */
 #define LRU_GEN_MASK		((BIT(LRU_GEN_WIDTH) - 1) << LRU_GEN_PGOFF)
 #define LRU_REFS_MASK		((BIT(LRU_REFS_WIDTH) - 1) << LRU_REFS_PGOFF)
 
@@ -406,8 +407,11 @@ enum {
  */
 struct lru_gen_struct {
 	/* the aging increments the youngest generation number */
+	/* max_seq - min_seq = 3 - 0 = 3 ，但调用 get_nr_gens()得到的是 4 */
+	/* 初始值为 3 ，但调用 get_nr_gens()得到的是 4 。调用 inc_max_seq()来增加 */
 	unsigned long max_seq;
 	/* the eviction increments the oldest generation numbers */
+	/* 初始值为 0 。调用 try_to_inc_min_seq() 来增加 */
 	unsigned long min_seq[ANON_AND_FILE];
 	/* the birth time of each generation in jiffies */
 	unsigned long timestamps[MAX_NR_GENS];
@@ -443,6 +447,10 @@ enum {
 
 struct lru_gen_mm_state {
 	/* set to max_seq after each iteration */
+	/*
+	 * 初始值是 2 。
+	 * 更新： lru_gen_del_mm iterate_mm_list
+	 */
 	unsigned long seq;
 	/* where the current iteration continues (inclusive) */
 	struct list_head *head;
@@ -451,6 +459,7 @@ struct lru_gen_mm_state {
 	/* to wait for the last page table walker to finish */
 	struct wait_queue_head wait;
 	/* Bloom filters flip after each iteration */
+	/* 指向一个 2^15 个 bit 的 bitmap 。存 */
 	unsigned long *filters[NR_BLOOM_FILTERS];
 	/* the mm stats for debugging */
 	unsigned long stats[NR_HIST_GENS][NR_MM_STATS];

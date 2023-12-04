@@ -100,6 +100,7 @@ static inline void mmget(struct mm_struct *mm)
 	atomic_inc(&mm->mm_users);
 }
 
+/* mm->mm_users 为 0 时返回 false ，否则返回 true */
 static inline bool mmget_not_zero(struct mm_struct *mm)
 {
 	return atomic_inc_not_zero(&mm->mm_users);

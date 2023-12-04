@@ -618,6 +618,7 @@ static void lru_deactivate_file_fn(struct lruvec *lruvec, struct folio *folio)
 
 static void lru_deactivate_fn(struct lruvec *lruvec, struct folio *folio)
 {
+	/* 为什么会有 lru_gen_enabled()？因为使能了 mglru ， PG_active 是清零的 */
 	if (!folio_test_unevictable(folio) && (folio_test_active(folio) || lru_gen_enabled())) {
 		long nr_pages = folio_nr_pages(folio);
 
@@ -731,6 +732,7 @@ void deactivate_page(struct page *page)
 {
 	struct folio *folio = page_folio(page);
 
+	/* 为什么会有 lru_gen_enabled()？因为使能了 mglru ， PG_active 是清零的 */
 	if (folio_test_lru(folio) && !folio_test_unevictable(folio) &&
 	    (folio_test_active(folio) || lru_gen_enabled())) {
 		struct folio_batch *fbatch;

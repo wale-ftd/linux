@@ -230,6 +230,7 @@ static int walk_p4d_range(pgd_t *pgd, unsigned long addr, unsigned long end,
 			continue;
 		}
 		if (ops->p4d_entry) {
+			/* 调用 vmscan.c 里的 walk_pud_range() */
 			err = ops->p4d_entry(p4d, addr, next, walk);
 			if (err)
 				break;
@@ -274,6 +275,7 @@ static int walk_pgd_range(unsigned long addr, unsigned long end,
 		if (is_hugepd(__hugepd(pgd_val(*pgd))))
 			err = walk_hugepd_range((hugepd_t *)pgd, addr, next, walk, PGDIR_SHIFT);
 		else if (ops->p4d_entry || ops->pud_entry || ops->pmd_entry || ops->pte_entry)
+		/* 有定义 p4d_entry */
 			err = walk_p4d_range(pgd, addr, next, walk);
 		if (err)
 			break;
@@ -339,6 +341,7 @@ static int walk_page_test(unsigned long start, unsigned long end,
 	struct vm_area_struct *vma = walk->vma;
 	const struct mm_walk_ops *ops = walk->ops;
 
+	/* 调用 should_skip_vma() */
 	if (ops->test_walk)
 		return ops->test_walk(start, end, walk);
 
