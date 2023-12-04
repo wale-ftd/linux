@@ -114,16 +114,24 @@
  * be the first one in the wait_list to be eligible for setting the handoff
  * bit. So concurrent setting/clearing of handoff bit is not possible.
  */
+/* 表示有 writer 在临界区 */
 #define RWSEM_WRITER_LOCKED	(1UL << 0)
 #define RWSEM_FLAG_WAITERS	(1UL << 1)
 #define RWSEM_FLAG_HANDOFF	(1UL << 2)
+/* 最高位为 1 。表示在临界区的 reader 太多，计数溢出 */
 #define RWSEM_FLAG_READFAIL	(1UL << (BITS_PER_LONG - 1))
 
 #define RWSEM_READER_SHIFT	8
 #define RWSEM_READER_BIAS	(1UL << RWSEM_READER_SHIFT)
+/* 低 8 位为 0 ，其它位为 1 */
 #define RWSEM_READER_MASK	(~(RWSEM_READER_BIAS - 1))
 #define RWSEM_WRITER_MASK	RWSEM_WRITER_LOCKED
+/* 表示是否有 writer 或者 reader 在临界区 */
 #define RWSEM_LOCK_MASK		(RWSEM_WRITER_MASK|RWSEM_READER_MASK)
+/*
+ * 只要 sem->count & RWSEM_READ_FAILED_MASK 不为 0 ， reader 就不能走快速路径
+ * 持锁
+ */
 #define RWSEM_READ_FAILED_MASK	(RWSEM_WRITER_MASK|RWSEM_FLAG_WAITERS|\
 				 RWSEM_FLAG_HANDOFF|RWSEM_FLAG_READFAIL)
 
@@ -240,12 +248,16 @@ static inline void rwsem_set_nonspinnable(struct rw_semaphore *sem)
 
 static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 {
+	/* reader 计数加 1 ，并返回新值 */
 	*cntp = atomic_long_add_return_acquire(RWSEM_READER_BIAS, &sem->count);
 
 	if (WARN_ON_ONCE(*cntp < 0))
+	/* 最高位为 1 ，说明 reader 计数器溢出 */
+		/* 标记禁止乐观自旋 */
 		rwsem_set_nonspinnable(sem);
 
 	if (!(*cntp & RWSEM_READ_FAILED_MASK)) {
+	/* 标记域全为 0 ，获锁成功 */
 		rwsem_set_reader_owned(sem);
 		return true;
 	}

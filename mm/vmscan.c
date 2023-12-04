@@ -3202,6 +3202,7 @@ static struct lru_gen_mm_list *get_mm_list(struct mem_cgroup *memcg)
 	return &mm_list;
 }
 
+/* 将 mm 加入 memcg.mm_list */
 void lru_gen_add_mm(struct mm_struct *mm)
 {
 	int nid;
@@ -3278,6 +3279,10 @@ void lru_gen_del_mm(struct mm_struct *mm)
 }
 
 #ifdef CONFIG_MEMCG
+/*
+ * An mm_struct list is maintained for each memcg, and an mm_struct follows
+ * its owner task to the new memcg when this task is migrated
+ */
 void lru_gen_migrate_mm(struct mm_struct *mm)
 {
 	struct mem_cgroup *memcg;
@@ -3326,6 +3331,10 @@ void lru_gen_migrate_mm(struct mm_struct *mm)
  *    small systems and false positives on large systems.
  * 3. Jenkins' hash function is an alternative to Knuth's.
  */
+/*
+ * 因为 hash 冲突，所以会有误判率。
+ * 当前使用的 hash 算法跟 Knuth 写的书有关。
+ */
 #define BLOOM_FILTER_SHIFT	15
 
 static inline int filter_gen_from_seq(unsigned long seq)
@@ -3335,6 +3344,7 @@ static inline int filter_gen_from_seq(unsigned long seq)
 
 static void get_item_key(void *item, int *key)
 {
+	/* 乘 2 是让 hash 值保留 30 bit，分别存在 2 个 key 中 */
 	u32 hash = hash_ptr(item, BLOOM_FILTER_SHIFT * 2);
 
 	BUILD_BUG_ON(BLOOM_FILTER_SHIFT * 2 > BITS_PER_TYPE(u32));
@@ -3424,18 +3434,25 @@ static bool should_skip_mm(struct mm_struct *mm, struct lru_gen_mm_walk *walk)
 	struct pglist_data *pgdat = lruvec_pgdat(walk->lruvec);
 	int key = pgdat->node_id % BITS_PER_TYPE(mm->lru_gen.bitmap);
 
+	/*
+	 * It tracks the usage of mm_struct's between context switches so that page
+	 * table walkers can skip processes that have been sleeping since the last
+	 * iteration
+	 */
 	if (!walk->force_scan && !test_bit(key, &mm->lru_gen.bitmap))
 		return true;
 
 	clear_bit(key, &mm->lru_gen.bitmap);
 
 	for (type = !walk->can_swap; type < ANON_AND_FILE; type++) {
+		/* shmem page 算进 anon 里 */
 		size += type ? get_mm_counter(mm, MM_FILEPAGES) :
 			       get_mm_counter(mm, MM_ANONPAGES) +
 			       get_mm_counter(mm, MM_SHMEMPAGES);
 	}
 
 	if (size < MIN_LRU_BATCH)
+	/* 跳过拥有较少物理页面的 mm */
 		return true;
 
 	return !mmget_not_zero(mm);
@@ -3595,12 +3612,18 @@ static void reset_ctrl_pos(struct lruvec *lruvec, int type, bool carryover)
 {
 	int hist, tier;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
+	/*
+	 *			  carryover/NR_HIST_GENS	 1	   >1
+	 * (inc max seq)false				   false  true
+	 * (inc min seq)true				   true   false
+	 */
 	bool clear = carryover ? NR_HIST_GENS == 1 : NR_HIST_GENS > 1;
 	unsigned long seq = carryover ? lrugen->min_seq[type] : lrugen->max_seq + 1;
 
 	lockdep_assert_held(&lruvec->lru_lock);
 
 	if (!carryover && !clear)
+	/* NR_HIST_GENS == 1 ，并且是 inc max seq 时 */
 		return;
 
 	hist = lru_hist_from_seq(seq);
@@ -3645,6 +3668,7 @@ static bool positive_ctrl_err(struct ctrl_pos *sp, struct ctrl_pos *pv)
  ******************************************************************************/
 
 /* promote pages accessed through page tables */
+/* 返回 old gen */
 static int folio_update_gen(struct folio *folio, int gen)
 {
 	unsigned long new_flags, old_flags = READ_ONCE(folio->flags);
@@ -3656,10 +3680,12 @@ static int folio_update_gen(struct folio *folio, int gen)
 		/* lru_gen_del_folio() has isolated this page? */
 		if (!(old_flags & LRU_GEN_MASK)) {
 			/* for shrink_folio_list() */
+			/* 参考 folio_inc_refs() */
 			new_flags = old_flags | BIT(PG_referenced);
 			continue;
 		}
 
+		/* 增加 gen ，要清除 refs 相关标志 */
 		new_flags = old_flags & ~(LRU_GEN_MASK | LRU_REFS_MASK | LRU_REFS_FLAGS);
 		new_flags |= (gen + 1UL) << LRU_GEN_PGOFF;
 	} while (!try_cmpxchg(&folio->flags, &old_flags, new_flags));
@@ -3685,6 +3711,7 @@ static int folio_inc_gen(struct lruvec *lruvec, struct folio *folio, bool reclai
 
 		new_gen = (old_gen + 1) % MAX_NR_GENS;
 
+		/* 增加 gen ，要清除 refs 相关标志 */
 		new_flags = old_flags & ~(LRU_GEN_MASK | LRU_REFS_MASK | LRU_REFS_FLAGS);
 		new_flags |= (new_gen + 1UL) << LRU_GEN_PGOFF;
 		/* for folio_end_writeback() */
@@ -3858,12 +3885,14 @@ static struct folio *get_pfn_folio(unsigned long pfn, struct mem_cgroup *memcg,
 		return NULL;
 
 	/* file VMAs can contain anon pages from COW */
+	/* 上面的注释是什么意思？ */
 	if (!folio_is_file_lru(folio) && !can_swap)
 		return NULL;
 
 	return folio;
 }
 
+/* 平均每个 cache line 最少有 1 个 young PTE 时，返回 true ；否则返回 false */
 static bool suitable_to_scan(int total, int young)
 {
 	int n = clamp_t(int, cache_line_size() / sizeof(pte_t), 2, 8);
@@ -4240,6 +4269,7 @@ static bool inc_min_seq(struct lruvec *lruvec, int type, bool can_swap)
 		goto done;
 
 	/* prevent cold/hot inversion if force_scan is true */
+	/* 将 min 里的页面迁移到 min+1 里 */
 	for (zone = 0; zone < MAX_NR_ZONES; zone++) {
 		struct list_head *head = &lrugen->lists[old_gen][type][zone];
 
@@ -4284,6 +4314,7 @@ static bool try_to_inc_min_seq(struct lruvec *lruvec, bool can_swap)
 					goto next;
 			}
 
+			/* lrugen->lists[gen][type] 为空，增加 min_seq */
 			min_seq[type]++;
 		}
 next:
@@ -4322,8 +4353,10 @@ static void inc_max_seq(struct lruvec *lruvec, bool can_swap, bool force_scan)
 		if (get_nr_gens(lruvec, type) != MAX_NR_GENS)
 			continue;
 
+		/* 一般情况不会执行到这里，因为在 should_run_aging()拦截了 */
 		VM_WARN_ON_ONCE(!force_scan && (type == LRU_GEN_FILE || can_swap));
 
+		/* get_nr_gens == MAX_NR_GENS 时，下面要开始增加 max 了，这里要先增加 min */
 		while (!inc_min_seq(lruvec, type, can_swap)) {
 			spin_unlock_irq(&lruvec->lru_lock);
 			cond_resched();
@@ -4391,6 +4424,20 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
 		goto done;
 	}
 
+	/*
+	 * To further exploit spatial locality, the aging prefers to walk page
+	 * tables to search for young PTEs and promote hot pages.  A kill switch
+	 * will be added in the next patch to disable this behavior.  When
+	 * disabled, the aging relies on the rmap only.
+	 *
+	 * NB: this behavior has nothing similar with the page table scanning in
+	 * the 2.4 kernel [1], which searches page tables for old PTEs, adds cold
+	 * pages to swapcache and unmaps them.
+	 *
+	 * To avoid confusion, the term "iteration" specifically means the
+	 * traversal of an entire mm_struct list; the term "walk" will be applied
+	 * to page tables and the rmap, as usual.
+	 */
 	walk = set_mm_walk(NULL);
 	if (!walk) {
 		success = iterate_mm_list_nowalk(lruvec, max_seq);
@@ -4402,6 +4449,11 @@ static bool try_to_inc_max_seq(struct lruvec *lruvec, unsigned long max_seq,
 	walk->can_swap = can_swap;
 	walk->force_scan = force_scan;
 
+	/*
+	 * Given an lruvec, the aging iterates lruvec_memcg()->mm_list and calls
+	 * walk_page_range() with each mm_struct on this list to promote hot pages
+	 * before it increments max_seq.
+	 */
 	do {
 		success = iterate_mm_list(lruvec, walk, &mm);
 		if (mm)
@@ -4428,6 +4480,7 @@ done:
 	return true;
 }
 
+/* 返回值表示是否需要老化(即增加 max)； nr_to_scan 表示需要扫描的页面个数 */
 static bool should_run_aging(struct lruvec *lruvec, unsigned long max_seq, unsigned long *min_seq,
 			     struct scan_control *sc, bool can_swap, unsigned long *nr_to_scan)
 {
@@ -4452,7 +4505,7 @@ static bool should_run_aging(struct lruvec *lruvec, unsigned long max_seq, unsig
 			total += size;
 			if (seq == max_seq)
 				young += size;
-			else if (seq + MIN_NR_GENS == max_seq)
+			else if (seq + MIN_NR_GENS == max_seq) /* 为什么不是 <= ? 因为 < 用不到 old */
 				old += size;
 		}
 	}
@@ -4466,9 +4519,13 @@ static bool should_run_aging(struct lruvec *lruvec, unsigned long max_seq, unsig
 	 * ideal number of generations is MIN_NR_GENS+1.
 	 */
 	if (min_seq[!can_swap] + MIN_NR_GENS > max_seq)
+	/* 代差小于 MIN_NR_GENS 时，要进行老化，但需要回收内存。如(2,3) (3,3) */
 		return true;
 	if (min_seq[!can_swap] + MIN_NR_GENS < max_seq)
+	/* 代差超过 MAX_NR_GENS 时，不进行老化，但需要回收内存。如(0,3) */
 		return false;
+
+	/* 当 max_seq - min_seq[!can_swap] == MIN_NR_GENS ，如(1,3) */
 
 	/*
 	 * It's also ideal to spread pages out evenly, i.e., 1/(MIN_NR_GENS+1)
@@ -4478,8 +4535,10 @@ static bool should_run_aging(struct lruvec *lruvec, unsigned long max_seq, unsig
 	 * cares about the lower bound of cold pages.
 	 */
 	if (young * MIN_NR_GENS > total)
+	/* 热页太多了 */
 		return true;
 	if (old * (MIN_NR_GENS + 2) < total)
+	/* 冷页太少了 */
 		return true;
 
 	return false;
@@ -4508,10 +4567,15 @@ static bool age_lruvec(struct lruvec *lruvec, struct scan_control *sc, unsigned 
 		unsigned long birth = READ_ONCE(lruvec->lrugen.timestamps[gen]);
 
 		if (time_is_after_jiffies(birth + min_ttl))
+		/*
+		 * birth + min_ttl > jiffies ，即 every generation is younger than min_ttl ，从而
+		 * 起到保护 working set min_ttl 个 jiffies 的作用
+		 */
 			return false;
 
 		/* the size is likely too small to be helpful */
 		if (!nr_to_scan && sc->priority != DEF_PRIORITY)
+		/* too small */
 			return false;
 	}
 
@@ -4586,6 +4650,18 @@ static void lru_gen_age_node(struct pglist_data *pgdat, struct scan_control *sc)
  * the PTE table to the Bloom filter. This forms a feedback loop between the
  * eviction and the aging.
  */
+/*
+ * scans at most BITS_PER_LONG-1 adjacent PTEs. On finding another young PTE,
+ * it clears the accessed bit and updates the gen counter of the page mapped
+ * by this PTE to (max_seq%MAX_NR_GENS)+1
+ *
+ * background: searching the rmap for PTEs mapping each page on an LRU list (
+ * to test and clear the accessed bit) can be expensive because pages from
+ * different VMAs (PA space) are not cache friendly to the rmap (VA space).
+ * For workloads mostly using mapped pages, searching the rmap can incur the
+ * highest CPU cost in the reclaim path.
+ */
+/* 作用： exploits spatial locality to reduce the trips into the rmap */
 void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 {
 	int i;
@@ -4666,6 +4742,13 @@ void lru_gen_look_around(struct page_vma_mapped_walk *pvmw)
 	rcu_read_unlock();
 
 	/* feedback from rmap walkers to page table walkers */
+	/*
+	 * a PMD has a sufficient number of hot pages, its address is placed in the filter.
+	 * In the aging path(walk_pmd_range()), set membership means that the PTE range will
+	 * be scanned for young pages. This forms a feedback loop between the eviction and
+	 * the aging.
+	 */
+
 	if (suitable_to_scan(i, young))
 		update_bloom_filter(lruvec, max_seq, pvmw->pmd);
 
@@ -4739,11 +4822,13 @@ static bool sort_folio(struct lruvec *lruvec, struct folio *folio, int tier_idx)
 		success = lru_gen_del_folio(lruvec, folio, true);
 		VM_WARN_ON_ONCE_FOLIO(!success, folio);
 		folio_set_swapbacked(folio);
+		/* 放入 anon 的 min_seq + 1 */
 		lruvec_add_folio_tail(lruvec, folio);
 		return true;
 	}
 
 	/* promoted */
+	/* 可能是被 folio_update_gen() 或者 folio_inc_gen() 提升 */
 	if (gen != lru_gen_from_seq(lrugen->min_seq[type])) {
 		list_move(&folio->lru, &lrugen->lists[gen][type][zone]);
 		return true;
@@ -4799,10 +4884,12 @@ static bool isolate_folio(struct lruvec *lruvec, struct folio *folio, struct sca
 
 	/* see the comment on MAX_NR_TIERS */
 	if (!folio_test_referenced(folio))
+	/* 没有被 reference ，要清除 refs 相关标记。因为先有 PG_reference ，再有 refs 。见 folio_inc_refs() */
 		set_mask_bits(&folio->flags, LRU_REFS_MASK | LRU_REFS_FLAGS, 0);
 
 	/* for shrink_folio_list() */
 	folio_clear_reclaim(folio);
+	/* 清除 referenced 标记后，不需要清除 refs ？ */
 	folio_clear_referenced(folio);
 
 	success = lru_gen_del_folio(lruvec, folio, true);
@@ -4830,6 +4917,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 
 	gen = lru_gen_from_seq(lrugen->min_seq[type]);
 
+	/* 新版本：从 zone[reclaim_idx] 开始，即 reclaim_idx -> 0 -> MAX_NR_ZONES-1 -> reclaim_idx+1 */
 	for (zone = sc->reclaim_idx; zone >= 0; zone--) {
 		LIST_HEAD(moved);
 		int skipped = 0;
@@ -4856,6 +4944,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 				skipped += delta;
 			}
 
+			/* 限制扫描页数 */
 			if (!--remaining || max(isolated, skipped) >= MIN_LRU_BATCH)
 				break;
 		}
@@ -4903,6 +4992,7 @@ static int get_tier_idx(struct lruvec *lruvec, int type)
 			break;
 	}
 
+	/* 为什么要减 1 ？因为 sort_folio()里是 > ，不包含等于 */
 	return tier - 1;
 }
 
@@ -4929,6 +5019,7 @@ static int get_type_to_scan(struct lruvec *lruvec, int swappiness, int *tier_idx
 			break;
 	}
 
+	/* 为什么要减 1 ？因为 sort_folio()里是 > ，不包含等于 */
 	*tier_idx = tier - 1;
 
 	return type;
@@ -4953,10 +5044,12 @@ static int isolate_folios(struct lruvec *lruvec, struct scan_control *sc, int sw
 	else if (min_seq[LRU_GEN_ANON] < min_seq[LRU_GEN_FILE])
 		type = LRU_GEN_ANON;
 	else if (swappiness == 1)
+	/* 表示不具备 swap anon 的条件，所以不 swap anon */
 		type = LRU_GEN_FILE;
 	else if (swappiness == 200)
 		type = LRU_GEN_ANON;
 	else
+		/* [2, 199] */
 		type = get_type_to_scan(lruvec, swappiness, &tier);
 
 	for (i = !swappiness; i < ANON_AND_FILE; i++) {
@@ -5087,6 +5180,7 @@ static unsigned long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *
 
 	if (mem_cgroup_below_min(memcg) ||
 	    (mem_cgroup_below_low(memcg) && !sc->memcg_low_reclaim))
+	/* memcg 的 page 小于 min ，不回收 */
 		return 0;
 
 	*need_aging = should_run_aging(lruvec, max_seq, min_seq, sc, can_swap, &nr_to_scan);
@@ -5114,6 +5208,7 @@ static bool should_abort_scan(struct lruvec *lruvec, unsigned long seq,
 	DEFINE_MAX_SEQ(lruvec);
 
 	if (!current_is_kswapd()) {
+	/* 对于直接回收 */
 		/* age each memcg at most once to ensure fairness */
 		if (max_seq - seq > 1)
 			return true;
@@ -5808,6 +5903,7 @@ void lru_gen_init_lruvec(struct lruvec *lruvec)
 	int gen, type, zone;
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 
+	/* max_seq - min_seq = 3 - 0 = 3 ，但调用 get_nr_gens()得到的是 4 */
 	lrugen->max_seq = MIN_NR_GENS + 1;
 	lrugen->enabled = lru_gen_enabled();
 

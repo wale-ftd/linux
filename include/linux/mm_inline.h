@@ -132,6 +132,16 @@ static inline int lru_hist_from_seq(unsigned long seq)
 	return seq % NR_HIST_GENS;
 }
 
+/*
+     PG_workingset
+refs  tier
+
+   0   1
+0  0   0
+1  0   1
+2  1   2
+3  2   2
+ */
 static inline int lru_tier_from_refs(int refs)
 {
 	VM_WARN_ON_ONCE(refs > BIT(LRU_REFS_WIDTH));
@@ -154,6 +164,7 @@ static inline int folio_lru_refs(struct folio *folio)
 	return ((flags & LRU_REFS_MASK) >> LRU_REFS_PGOFF) + workingset;
 }
 
+/* gen 初始值是 -1 */
 static inline int folio_lru_gen(struct folio *folio)
 {
 	unsigned long flags = READ_ONCE(folio->flags);
@@ -168,6 +179,7 @@ static inline bool lru_gen_is_active(struct lruvec *lruvec, int gen)
 	VM_WARN_ON_ONCE(gen >= MAX_NR_GENS);
 
 	/* see the comment on MIN_NR_GENS */
+	/* 最年轻的二代是 active 页面，否则是 inactive */
 	return gen == lru_gen_from_seq(max_seq) || gen == lru_gen_from_seq(max_seq - 1);
 }
 
@@ -190,6 +202,8 @@ static inline void lru_gen_update_size(struct lruvec *lruvec, struct folio *foli
 	if (new_gen >= 0)
 		WRITE_ONCE(lrugen->nr_pages[new_gen][type][zone],
 			   lrugen->nr_pages[new_gen][type][zone] + delta);
+
+	/* 下面是兼容旧算法 */
 
 	/* addition */
 	if (old_gen < 0) {
@@ -251,6 +265,7 @@ static inline bool lru_gen_add_folio(struct lruvec *lruvec, struct folio *folio,
 	gen = lru_gen_from_seq(seq);
 	flags = (gen + 1UL) << LRU_GEN_PGOFF;
 	/* see the comment on MIN_NR_GENS about PG_active */
+	/* 会清除 PG_active 位，前面已经使用过 PG_active 位了 */
 	set_mask_bits(&folio->flags, LRU_GEN_MASK | BIT(PG_active), flags);
 
 	lru_gen_update_size(lruvec, folio, -1, gen);

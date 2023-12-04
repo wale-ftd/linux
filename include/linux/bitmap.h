@@ -433,6 +433,7 @@ static inline bool bitmap_full(const unsigned long *src, unsigned int nbits)
 	return find_first_zero_bit(src, nbits) == nbits;
 }
 
+/* 判断 bitmap 有几个 1  */
 static __always_inline
 unsigned int bitmap_weight(const unsigned long *src, unsigned int nbits)
 {

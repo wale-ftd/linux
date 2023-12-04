@@ -342,6 +342,7 @@ static __always_inline void __assign_bit(long nr, volatile unsigned long *addr,
 #ifdef __KERNEL__
 
 #ifndef set_mask_bits
+/* 将 mask 相关的位清零，再 或上 bits 。返回 ptr 指向的旧值 */
 #define set_mask_bits(ptr, mask, bits)	\
 ({								\
 	const typeof(*(ptr)) mask__ = (mask), bits__ = (bits);	\

@@ -103,6 +103,12 @@ enum pageflags {
 	PG_uptodate,
 	PG_dirty,
 	PG_lru,
+	/*
+	 * PG_active is always cleared while a page is on one of lrugen->lists[] so that
+	 * the aging needs not to worry about it. And it's set again when a page
+	 * considered active is isolated for non-reclaiming purposes, e.g., migration.
+	 * See lru_gen_add_folio() and lru_gen_del_folio().
+	 */
 	PG_active,
 	PG_workingset,
 	PG_waiters,		/* Page has waiters, check its waitqueue. Must be bit #7 and in the same byte as "PG_locked" */

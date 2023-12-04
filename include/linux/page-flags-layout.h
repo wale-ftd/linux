@@ -107,6 +107,7 @@
 #endif
 
 /* see the comment on MAX_NR_TIERS */
+/* == 2 ， LRU_GEN_WIDTH == 3 。都定义在 kernel/bounds.c */
 #define LRU_REFS_WIDTH	min(__LRU_REFS_WIDTH, BITS_PER_LONG - NR_PAGEFLAGS - \
 			    ZONES_WIDTH - LRU_GEN_WIDTH - SECTIONS_WIDTH - \
 			    NODES_WIDTH - KASAN_TAG_WIDTH - LAST_CPUPID_WIDTH)

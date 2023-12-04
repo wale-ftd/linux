@@ -429,6 +429,11 @@ static void __lru_cache_activate_folio(struct folio *folio)
 }
 
 #ifdef CONFIG_LRU_GEN
+/*
+ * unreferenced,unworkingset,refs -> referenced,unworkingset,refs
+ * referenced,unworkingset,refs   -> referenced,workingset,refs
+ * referenced,workingset,refs     -> referenced,workingset,refs+1
+ */
 static void folio_inc_refs(struct folio *folio)
 {
 	unsigned long new_flags, old_flags = READ_ONCE(folio->flags);
@@ -448,11 +453,15 @@ static void folio_inc_refs(struct folio *folio)
 
 	/* see the comment on MAX_NR_TIERS */
 	do {
+		/* 取出 refs */
 		new_flags = old_flags & LRU_REFS_MASK;
 		if (new_flags == LRU_REFS_MASK)
+		/* 达到 refs 的最大值 */
 			break;
 
+		/* refs++ */
 		new_flags += BIT(LRU_REFS_PGOFF);
+		/* 还原 flags 里的其它位 */
 		new_flags |= old_flags & ~LRU_REFS_MASK;
 	} while (!try_cmpxchg(&folio->flags, &old_flags, new_flags));
 }
@@ -618,6 +627,7 @@ static void lru_deactivate_file_fn(struct lruvec *lruvec, struct folio *folio)
 
 static void lru_deactivate_fn(struct lruvec *lruvec, struct folio *folio)
 {
+	/* 为什么会有 lru_gen_enabled()？因为使能了 mglru ， PG_active 是清零的 */
 	if (!folio_test_unevictable(folio) && (folio_test_active(folio) || lru_gen_enabled())) {
 		long nr_pages = folio_nr_pages(folio);
 
@@ -731,6 +741,7 @@ void deactivate_page(struct page *page)
 {
 	struct folio *folio = page_folio(page);
 
+	/* 为什么会有 lru_gen_enabled()？因为使能了 mglru ， PG_active 是清零的 */
 	if (folio_test_lru(folio) && !folio_test_unevictable(folio) &&
 	    (folio_test_active(folio) || lru_gen_enabled())) {
 		struct folio_batch *fbatch;
