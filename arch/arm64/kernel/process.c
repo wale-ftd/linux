@@ -331,6 +331,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 	fpsimd_flush_task_state(p);
 
 	if (likely(!(p->flags & PF_KTHREAD))) {
+    /* 子进程是用户进程 */
 		*childregs = *current_pt_regs();
 		childregs->regs[0] = 0;
 
@@ -354,6 +355,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 		if (clone_flags & CLONE_SETTLS)
 			p->thread.uw.tp_value = childregs->regs[3];
 	} else {
+    /* 子进程是内核线程 */
 		memset(childregs, 0, sizeof(struct pt_regs));
 		childregs->pstate = PSR_MODE_EL1h;
 		if (IS_ENABLED(CONFIG_ARM64_UAO) &&
@@ -424,11 +426,30 @@ __notrace_funcgraph struct task_struct *__switch_to(struct task_struct *prev,
 {
 	struct task_struct *last;
 
+	/* 切换浮点寄存器 */
 	fpsimd_thread_switch(next);
+	/* 切换线程本地存储相关的寄存器 */
 	tls_thread_switch(next);
+	/* 切换调试寄存器 */
 	hw_breakpoint_thread_switch(next);
+	/* 把上下文标识符寄存器 CONTEXTIDR_EL1 设置为下一个进程的进程号 */
 	contextidr_thread_switch(next);
+	/*
+	 * 使用当前处理器的每处理器变量 __entry_task 记录下一个进程的进程描述
+	 * 符的地址，因为内核使用用户栈指针寄存器 SP_EL0 存放当前进程的进程描
+	 * 述符的第一个成员 thread_info 的地址，但是用户空间会改变用户栈指针
+	 * 寄存器 SP_EL0 ，所以使用当前处理器的每处理器变量__entry_task 记录
+	 * 下一个进程的进程描述符的地址，以便从用户空间进入内核空间时可以恢复
+	 * 用户栈指针寄存器 SP_EL0
+	 */
 	entry_task_switch(next);
+	/*
+	 * 根据下一个进程可访问的虚拟地址空间上限恢复用户访问覆盖(User Access
+	 * Override ， UAO) 状态。开启 UAO 特性以后，get_user()/put_user()使用
+	 * 非特权的加载/存储指令访问用户地址空间，当使用函数 set_fs(KERNEL_DS)
+	 * 把进程可访问的地址空间上限设置为内核地址空间上限时，设置覆盖位允许
+	 * 非特权的加载/存储指令访问内核地址空间
+	 */
 	uao_thread_switch(next);
 	ptrauth_thread_switch(next);
 
@@ -438,9 +459,14 @@ __notrace_funcgraph struct task_struct *__switch_to(struct task_struct *prev,
 	 * This full barrier is also required by the membarrier system
 	 * call.
 	 */
+	/*
+	 * 在这个处理器上执行完前面的所有页表缓存或者缓存维护操作，以防线程迁
+	 * 移到其他处理器
+	 */
 	dsb(ish);
 
 	/* the actual thread switch */
+    /* 切换通用寄存器。实现在 arch/arm64/kernel/entry.S */
 	last = cpu_switch_to(prev, next);
 
 	return last;

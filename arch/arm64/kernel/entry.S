@@ -70,6 +70,7 @@
 
 	.macro kernel_ventry, el, label, regsize = 64
 	.align 7
+/* 有定义 */
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 alternative_if ARM64_UNMAP_KERNEL_AT_EL0
 	.if	\el == 0
@@ -83,7 +84,9 @@ alternative_if ARM64_UNMAP_KERNEL_AT_EL0
 alternative_else_nop_endif
 #endif
 
+	/* S_FRAME_SIZE(定义在 arch/arm64/kernel/asm-offsets.c) 为 pt_regs 的大小。 */
 	sub	sp, sp, #S_FRAME_SIZE
+/* 未定义 */
 #ifdef CONFIG_VMAP_STACK
 	/*
 	 * Test whether the SP has overflowed, without corrupting a GPR.
@@ -126,6 +129,7 @@ alternative_else_nop_endif
 	sub	sp, sp, x0
 	mrs	x0, tpidrro_el0
 #endif
+	/* \() 在汇编中可以来用表示宏参数的结束标记。如下面语句可以表示 el1_irq */
 	b	el\()\el\()_\label
 	.endm
 
@@ -158,6 +162,7 @@ alternative_cb_end
 	.if	\regsize == 32
 	mov	w0, w0				// zero upper 32 bits of x0
 	.endif
+	/* 保存 x0~x29 寄存器的值到 pt_regs 中 */
 	stp	x0, x1, [sp, #16 * 0]
 	stp	x2, x3, [sp, #16 * 1]
 	stp	x4, x5, [sp, #16 * 2]
@@ -175,16 +180,32 @@ alternative_cb_end
 	stp	x28, x29, [sp, #16 * 14]
 
 	.if	\el == 0
+	/* 异常发生在 EL0 */
+	/* 清除 x0~x29 寄存器的值 */
 	clear_gp_regs
 	mrs	x21, sp_el0
+	/*
+	 * 是一个宏，定义在 arch/arm64/include/asm/assembler.h 。将当前 CPU 运行
+	 * 的进程的 task_struct 结构体赋值给 tsk(x28 寄存器)
+	 */
 	ldr_this_cpu	tsk, __entry_task, x20	// Ensure MDSCR_EL1.SS is clear,
 	ldr	x19, [tsk, #TSK_TI_FLAGS]	// since we can unmask debug
+	/*
+	 * 是一个宏，定义在 arch/arm64/include/asm/assembler.h 。如果进程允许单
+	 * 步调试，那么关闭 MDSCR_EL1 中的软件单步控制功能
+	 */
 	disable_step_tsk x19, x20		// exceptions when scheduling.
 
 	apply_ssbd 1, x22, x23
 
 	.else
+	/* x21 寄存器指向这个栈最开始的地方 */
 	add	x21, sp, #S_FRAME_SIZE
+	/*
+	 * 是一个宏，定义在 arch/arm64/include/asm/assembler.h 。通过 SP_EL0 寄
+	 * 存器来获取 task_struct 数据结构中的指针到 tsk(x28 寄存器)。为什么可以
+	 * 这样？
+	 */
 	get_thread_info tsk
 	/* Save the task's original addr_limit and set USER_DS */
 	ldr	x20, [tsk, #TSK_TI_ADDR_LIMIT]
@@ -207,6 +228,7 @@ alternative_cb_end
 	.else
 	stp	x29, x22, [sp, #S_STACKFRAME]
 	.endif
+	/* x29 寄存器指向 pt_regs.stackframe */
 	add	x29, sp, #S_STACKFRAME
 
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
@@ -234,6 +256,7 @@ alternative_else_nop_endif
 1:
 #endif
 
+	/* 把 ELR_EL1/SPSR_EL1 的值保存到 pt_regs.pc/pt_regs.pstate */
 	stp	x22, x23, [sp, #S_PC]
 
 	/* Not in a syscall by default (el0_svc overwrites for real syscall) */
@@ -246,6 +269,10 @@ alternative_else_nop_endif
 	 * Set sp_el0 to current thread_info.
 	 */
 	.if	\el == 0
+	/*
+	 * 当异常发生在 EL0 ，把当前进程的 task_struct 指针保存到 SP_EL0 寄存器
+	 * 里，因为在 EL0 发生异常，会 trap 到 EL1 ，在 EL1 中， SP_EL0 是不用的
+	 */
 	msr	sp_el0, tsk
 	.endif
 
@@ -351,6 +378,7 @@ alternative_insn eret, nop, ARM64_UNMAP_KERNEL_AT_EL0
 	bne	4f
 	msr	far_el1, x30
 	tramp_alias	x30, tramp_exit_native
+	/* 切换到跳板页表 */
 	br	x30
 4:
 	tramp_alias	x30, tramp_exit_compat
@@ -375,11 +403,13 @@ alternative_insn eret, nop, ARM64_UNMAP_KERNEL_AT_EL0
 	and	x25, x25, #~(THREAD_SIZE - 1)
 	cbnz	x25, 9998f
 
+	/* irq_stack_ptr 是一个 per-cpu 变量。在 init_irq_stacks()初始化 */
 	ldr_this_cpu x25, irq_stack_ptr, x26
 	mov	x26, #IRQ_STACK_SIZE
 	add	x26, x25, x26
 
 	/* switch to the irq stack */
+	/* 使 SP 指向当前 CPU 的中断栈 */
 	mov	sp, x26
 9998:
 	.endm
@@ -398,10 +428,20 @@ tsk	.req	x28		// current thread_info
 /*
  * Interrupt handling.
  */
+/*
+ * 1. 中断发生时，中断上下文保存在被中断的进程的内核栈里
+ * 2. 在 irq_stack_entry 宏里切换到中断栈
+ * 3. 处理中断
+ * 4. 在 irq_stack_exit 宏把中断栈切换回被中断的进程的内核栈
+ * 5. 退出中断
+ */
 	.macro	irq_handler
+	/* handle_arch_irq 在 init_IRQ()里初始化。如 gic_handle_irq() */
 	ldr_l	x1, handle_arch_irq
 	mov	x0, sp
+	/* 设置栈地址 */
 	irq_stack_entry
+	/* 调用 arch 的中断处理函数 */
 	blr	x1
 	irq_stack_exit
 	.endm
@@ -410,6 +450,31 @@ tsk	.req	x28		// current thread_info
 
 /*
  * Exception vectors.
+ */
+/*
+ * arm64 中，EL1, EL2, EL3 都有自己的异常向量表。每个表项是 128 字节，这样
+ * 可以存放 32 条指令(指令是 32 位的)。但 linux 只用了 EL1 和 EL2 。下面定
+ * 义的是 EL1 的异常向量表。EL2 的异常向量表是 __hyp_stub_vectors(定义在
+ * arch/arm64/kernel/hyp-stub.S)。
+ * 异常分成同步异常和异步异常两种，其中有一种同步异常和三种异步异常(也称中断)
+ *
+ * 可以通过 SPSel 寄存器(对应 PSTATE 寄存器中的 SP 字段)来配置 SP 。 PSTATE
+ * 寄存器中的 SP 字段设置为 0 ，表示在所有的 EL 中使用 SP_EL0 作为栈指针寄
+ * 存器；设置为 1 ，表示使用 SP_ELx(如果当前在 EL1 ，则为 SP_EL1)作为栈指针
+ * 寄存器。
+ * 当配置 SP_EL0 作为栈指针时，可以使用后缀 t 来标记。例如，如果在 EL1 里使
+ * 用 SP_EL0 作为栈指针，可以使用 SP_EL1t 来表示。当配置 SP_ELx 作为栈指针
+ * 时，可以使用后缀 h 来标记。例如，如果在 EL1 里使用 SP_EL1 作为栈指针，可
+ * 以使用 SP_EL1h 来表示。
+ *
+ * 处理器在内核态(EL1)执行时触发了 IRQ ，如果系统通过配置 SPSel 寄存器来使用
+ * SP_ELx 寄存器作为栈指针，处理器会跳转到 VBAR_EL1 + 0x280(即 IRQ EL1h)地址
+ * 处的异常向量中。如果系统通过配置 SPSel 寄存器来使用 SP_EL0 寄存器作为栈指
+ * 针，处理器会跳转到 VBAR_EL1 + 0x80(即 IRQ EL1t)地址处的异常向量中。
+ * 处理器在用户态(EL0)执行时触发了 IRQ ，如果用户态的执行状态为 AArch64 ，该
+ * 异常会陷入 EL1 中，那么处理器会跳转到 VBAR_EL1 + 0x480(即 IRQ 64-bit EL0)
+ * 地址处的异常向量中。如果用户态的执行状态为 AArch32 ，该异常会陷入 EL1 中，
+ * 那么处理器会跳转到 VBAR_EL1 + 0x680(即 IRQ 32-bit EL0)地址处的异常向量中。
  */
 	.pushsection ".entry.text", "ax"
 
@@ -543,6 +608,7 @@ el1_sync:
 	b.eq	el1_undef
 	cmp	x24, #ESR_ELx_EC_BREAKPT_CUR	// debug exception in EL1
 	b.ge	el1_dbg
+	/* 其它异常类型统一处理 */
 	b	el1_inv
 
 el1_ia:
@@ -555,6 +621,7 @@ el1_da:
 	 */
 	mrs	x3, far_el1
 	inherit_daif	pstate=x23, tmp=x2
+	/* 将 x3 的值简单处理后迁移到 x0 中 */
 	clear_address_tag x0, x3
 	mov	x2, sp				// struct pt_regs
 	bl	do_mem_abort
@@ -600,23 +667,32 @@ ENDPROC(el1_sync)
 
 	.align	6
 el1_irq:
+	/* 是一个宏，用来保存中断上下文 */
 	kernel_entry 1
+	/* 是一个宏，通过 msr 指令来把 PSTATE 寄存器的 D 域(调试异常)、 A 域(
+	 * SError 中断)和 F 域(FIQ)的掩码位清零，也就是打开这些异常和快速中断的
+	 * 功能。但是 IRQ 还是关闭的，因为现在正在处理 IRQ ，打开 IRQ 会带来复杂
+	 * 的中断嵌套问题，目前 Linux 内核不支持中断嵌套。
+	 */
 	enable_da_f
 #ifdef CONFIG_TRACE_IRQFLAGS
 	bl	trace_hardirqs_off
 #endif
 
+	/* 这是一个宏，定义在本文件中 */
 	irq_handler
 
 #ifdef CONFIG_PREEMPT
 	ldr	x24, [tsk, #TSK_TI_PREEMPT]	// get preempt count
 	cbnz	x24, 1f				// preempt count != 0
+	/* preempt count == 0 ，说明当前进程可以被安全抢占 */
 	bl	el1_preempt
 1:
 #endif
 #ifdef CONFIG_TRACE_IRQFLAGS
 	bl	trace_hardirqs_on
 #endif
+	/* 恢复中断上下文 */
 	kernel_exit 1
 ENDPROC(el1_irq)
 
@@ -625,6 +701,7 @@ el1_preempt:
 	mov	x24, lr
 1:	bl	preempt_schedule_irq		// irq en/disable is done inside
 	ldr	x0, [tsk, #TSK_TI_FLAGS]	// get new tasks TI_FLAGS
+	/* 如果被选中的进程也设置了需要重新调度的标志位，那么继续执行抢占调度 */
 	tbnz	x0, #TIF_NEED_RESCHED, 1b	// needs rescheduling?
 	ret	x24
 #endif
@@ -849,6 +926,7 @@ el0_irq_naked:
 	bl	do_el0_irq_bp_hardening
 1:
 #endif
+	/* 这是一个宏，定义在本文件中 */
 	irq_handler
 
 #ifdef CONFIG_TRACE_IRQFLAGS
@@ -883,6 +961,10 @@ ENDPROC(el0_error)
  */
 work_pending:
 	mov	x0, sp				// 'regs'
+	/*
+	 * 寄存器 x0 存放第一个参数regs
+	 * 寄存器 x1 存放第二个参数 task_struct.thread_info.flags
+	 */
 	bl	do_notify_resume
 #ifdef CONFIG_TRACE_IRQFLAGS
 	bl	trace_hardirqs_on		// enabled while in userspace
@@ -894,6 +976,11 @@ work_pending:
  */
 ret_to_user:
 	disable_daif
+	/*
+	 * 判断当前进程的进程描述符的成员 thread_info.flags 有没有设置标志
+	 * 位集合 _TIF_WORK_MASK 中的任何一个标志位，如果设置了其中一个标
+	 * 志位，那么跳转到标号 work_pending
+	 */
 	ldr	x1, [tsk, #TSK_TI_FLAGS]
 	and	x2, x1, #_TIF_WORK_MASK
 	cbnz	x2, work_pending
@@ -985,12 +1072,20 @@ alternative_insn isb, nop, ARM64_WORKAROUND_QCOM_FALKOR_E1003
 
 	.macro tramp_exit, regsize = 64
 	adr	x30, tramp_vectors
+	/* 把跳板向量表设置到 VBAR_EL1 中 */
 	msr	vbar_el1, x30
+	/* 切换页表 */
 	tramp_unmap_kernel	x30
 	.if	\regsize == 64
 	mrs	x30, far_el1
 	.endif
 	eret
+	/*
+	 * 预防高速缓存侧信道的攻击。攻击者可以利用乱序执行的漏洞来攻击，乱序
+	 * 执行可能会把 eret 后面的一些访问指令预取了，这里添加内存屏障指令来
+	 * 防止乱序执行带来的高速缓存侧信道攻击。 sb 宏定义在
+	 * arch/arm64/include/asm/assembler.h 中
+	 */
 	sb
 	.endm
 
@@ -1038,25 +1133,40 @@ __entry_tramp_data_start:
  *
  */
 ENTRY(cpu_switch_to)
+    /*
+     * 读取 task_struct 数据结构中的 thread_struct.cpu_context 成员的偏移量。
+     * 定义在 arch/arm64/kernel/asm-offsets.c 中。
+     */
 	mov	x10, #THREAD_CPU_CONTEXT
 	add	x8, x0, x10
+	/* 保存当前 SP 到 x9 */
 	mov	x9, sp
+	/* 把当前寄存器的值保存到 prev 进程的 cpu_context 数据结构中 */
 	stp	x19, x20, [x8], #16		// store callee-saved registers
 	stp	x21, x22, [x8], #16
 	stp	x23, x24, [x8], #16
 	stp	x25, x26, [x8], #16
 	stp	x27, x28, [x8], #16
 	stp	x29, x9, [x8], #16
+	/* 把当前 LR 寄存器的值也保存到 cpu_context.pc 成员中 */
 	str	lr, [x8]
 	add	x8, x1, x10
+	/* 把 next 进程的 cpu_context 数据结构保存的值恢复到对应的当前寄存器中  */
 	ldp	x19, x20, [x8], #16		// restore callee-saved registers
 	ldp	x21, x22, [x8], #16
 	ldp	x23, x24, [x8], #16
 	ldp	x25, x26, [x8], #16
 	ldp	x27, x28, [x8], #16
 	ldp	x29, x9, [x8], #16
+	/* 恢复 lr 和 sp 寄存器 */
 	ldr	lr, [x8]
 	mov	sp, x9
+	/*
+	 * 切换后，运行在内核态。在内核态， SP_EL0 没用，所以可以用它来做些有意
+	 * 义的事情。例好把 next 进程的描述符的指针保存到 SP_EL0 寄存器中。在
+	 * next 进程的运行过程中，为了通过 SP_EL0 寄存器来获取 task_struct ，可
+	 * 以使用 current()
+	 */
 	msr	sp_el0, x1
 	ret
 ENDPROC(cpu_switch_to)
@@ -1067,8 +1177,13 @@ NOKPROBE(cpu_switch_to)
  */
 ENTRY(ret_from_fork)
 	bl	schedule_tail
+	/*
+	 * 判断 x19 是否为 0 ，若为 0 ，说明当前线程不是一个内核线程，跳转到 1f 。
+	 * x19 在 copy_thread()里设置。
+	 */
 	cbz	x19, 1f				// not a kernel thread
 	mov	x0, x20
+	/* 是内核线程，跳转到 x19 指定的地址 */
 	blr	x19
 1:	get_thread_info tsk
 	b	ret_to_user

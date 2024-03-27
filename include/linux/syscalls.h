@@ -220,6 +220,12 @@ static inline int is_syscall_trace_event(struct trace_event_call *tp_event)
 
 #define SYSCALL_DEFINE_MAXARGS	6
 
+/*
+ * SYSCALL_METADATA 用于 ftrace 调试系统调用， __SYSCALL_DEFINEx 使用 arm64 里定义的
+ * 如 __arm64_sys_brk() 函数的地址会存放到系统调用表 sys_call_table 中，定义在
+ * arch/arm64/kernel/sys.c 文件里。
+ * 用户态的系统调用是通过 SVC 指令实现的，入口是 el0_svc ，是同步异常的一种。
+ */
 #define SYSCALL_DEFINEx(x, sname, ...)				\
 	SYSCALL_METADATA(sname, x, __VA_ARGS__)			\
 	__SYSCALL_DEFINEx(x, sname, __VA_ARGS__)
@@ -230,6 +236,10 @@ static inline int is_syscall_trace_event(struct trace_event_call *tp_event)
  * The asmlinkage stub is aliased to a function named __se_sys_*() which
  * sign-extends 32-bit ints to longs whenever needed. The actual work is
  * done within __do_sys_*().
+ */
+/*
+ * asmlinkage 表示这个 C 语言函数可以被汇编代码调用。如果使用 C++ 编译器，
+ * asmlinkage 被定义为 extern "C" ；如果使用 C 编译器， asmlinkage 是空的宏。
  */
 #ifndef __SYSCALL_DEFINEx
 #define __SYSCALL_DEFINEx(x, name, ...)					\

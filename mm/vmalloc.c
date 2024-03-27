@@ -8,6 +8,22 @@
  *  Numa awareness, Christoph Lameter, SGI, June 2005
  */
 
+/*
+ * 当设备长时间运行后，内存碎片化，很难找到连续的物理页。在这种情况下，如果需要
+ * 分配长度超过一页的内存块，可以使用不连续页分配器，分配虚拟地址连续但是物理地
+ * 址不连续的内存块。在 32 位系统中，不连续页分配器还有一个好处：优先从高端内存
+ * 区域分配页，保留稀缺的低端内存区域。
+ *
+ * 常用函数：
+ *   1.vmalloc/vfree ：分配不连续的物理页并且把物理页映射到连续的虚拟地址空间。
+ *   2.vmap/vunmap ：把已经分配的不连续物理页映射到连续的虚拟地址空间。
+ *   3.kvmalloc/kvfree ：先尝试使用 kmalloc 分配内存块，如果失败，那么使用
+ *                       vmalloc 函数分配不连续的物理页。
+ *
+ * 每个虚拟内存区域对应一个 vmap_area 实例。每个 vmap_area 实例关联一个
+ * vm_struct 实例
+ */
+
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -240,6 +256,7 @@ static int vmap_page_range(unsigned long start, unsigned long end,
 {
 	int ret;
 
+    /* 遍历页表和填充对应的页表 */
 	ret = vmap_page_range_noflush(start, end, prot, pages);
 	flush_cache_vmap(start, end);
 	return ret;
@@ -399,6 +416,7 @@ static BLOCKING_NOTIFIER_HEAD(vmap_notify_list);
  * Allocate a region of KVA of the specified size and alignment, within the
  * vstart and vend.
  */
+/* 在 vmalloc 区域中查找一块大小合适的并且没有使用的空间，这段空间称为缝隙(hole) */
 static struct vmap_area *alloc_vmap_area(unsigned long size,
 				unsigned long align,
 				unsigned long vstart, unsigned long vend,
@@ -438,6 +456,7 @@ retry:
 	 * Note that __free_vmap_area may update free_vmap_cache
 	 * without updating cached_hole_size or cached_align.
 	 */
+	/* free_vmap_cache 是一个优化选项。核心思想是从上一次查找的结果中开始查找。 */
 	if (!free_vmap_cache ||
 			size < cached_hole_size ||
 			vstart < cached_vstart ||
@@ -467,6 +486,7 @@ nocache:
 		n = vmap_area_root.rb_node;
 		first = NULL;
 
+        /* 遍历的结果是返回起始地址最小的 vmalloc 区域，存放在 first 里 */
 		while (n) {
 			struct vmap_area *tmp;
 			tmp = rb_entry(n, struct vmap_area, rb_node);
@@ -484,6 +504,11 @@ nocache:
 	}
 
 	/* from the starting point, walk areas until a suitable hole is found */
+    /*
+     * 从 first 开始，查找每个已存在的 vmalloc 区域的缝隙能否容纳目前分配请求的
+     * 大小。如果已有 vmalloc 区域的缝隙不能容纳，那么从最后一块 vmalloc 区域的
+     * 结束地址开辟一个新的 vmalloc 区域
+     */
 	while (addr + size > first->va_start && addr + size <= vend) {
 		if (addr + cached_hole_size < first->va_start)
 			cached_hole_size = first->va_start - addr;
@@ -1383,6 +1408,7 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
 		return NULL;
 
 	if (flags & VM_IOREMAP)
+        /* 用于 IOREMAP ，默认情况下按 128 个页面对齐 */
 		align = 1ul << clamp_t(int, get_count_order_long(size),
 				       PAGE_SHIFT, IOREMAP_MAX_ORDER);
 
@@ -1391,6 +1417,7 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
 		return NULL;
 
 	if (!(flags & VM_NO_GUARD))
+        /* 多分配一个页面 */
 		size += PAGE_SIZE;
 
 	va = alloc_vmap_area(size, align, start, end, node, gfp_mask);
@@ -1671,6 +1698,7 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	area->nr_pages = nr_pages;
 	/* Please note that the recursion is strictly bounded. */
 	if (array_size > PAGE_SIZE) {
+        /* 递归调用 */
 		pages = __vmalloc_node(array_size, 1, nested_gfp|highmem_mask,
 				PAGE_KERNEL, node, area->caller);
 	} else {
@@ -1683,6 +1711,7 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 		return NULL;
 	}
 
+    /* 离散分配页面，说明通过 vmalloc()分配的物理页面可能是不连续的 */
 	for (i = 0; i < area->nr_pages; i++) {
 		struct page *page;
 
@@ -1701,6 +1730,7 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 			cond_resched();
 	}
 
+    /* 建立页面映射 */
 	if (map_vm_area(area, prot, pages))
 		goto fail;
 	return area->addr;
@@ -1747,6 +1777,7 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
 	if (!area)
 		goto fail;
 
+    /* 分配物理内存，并和 vm_struct 空间建立映射关系 */
 	addr = __vmalloc_area_node(area, gfp_mask, prot, node);
 	if (!addr)
 		return NULL;

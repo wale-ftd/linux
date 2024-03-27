@@ -151,6 +151,7 @@ struct pt_regs {
 	union {
 		struct user_pt_regs user_regs;
 		struct {
+			/* x0~x30 共 31 个通过寄存器。其中 x29 也称 FP ， x30 也称 LR 。 */
 			u64 regs[31];
 			u64 sp;
 			u64 pc;

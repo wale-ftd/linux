@@ -9,7 +9,15 @@
 #define MAP_EXECUTABLE	0x1000		/* mark it as an executable */
 #define MAP_LOCKED	0x2000		/* pages are locked */
 #define MAP_NORESERVE	0x4000		/* don't check for reservations */
+/*
+ * VMA 映射完后就分配内存。
+ * 对于文件映射来说，会提前预读文件内容到映射区域，该特性只支持私用映射
+ */
 #define MAP_POPULATE	0x8000		/* populate (prefault) pagetables */
+/*
+ * 和 MAP_POPULATE 联合使用才有意义，从 Linux 2.6.23 开始，该标志导致
+ * MAP_POPULATE 什么都不做
+ */
 #define MAP_NONBLOCK	0x10000		/* do not block on IO */
 #define MAP_STACK	0x20000		/* give out an address that is best suited for process/thread stacks */
 #define MAP_HUGETLB	0x40000		/* create a huge page mapping */

@@ -1407,12 +1407,24 @@ sd_init(struct sched_domain_topology_level *tl,
  * Topology list, bottom-up.
  */
 static struct sched_domain_topology_level default_topology[] = {
+/* 有定义 */
 #ifdef CONFIG_SCHED_SMT
+	/*
+	 * Simultaneous MultiThreading ，一个物理核心可以有两个或者更多的运行线程，
+	 * 这称为超线程技术。超线程使用相同 CPU 资源且共享 L1 高速缓存，迁移进程不
+	 * 会影响高速缓存利用率
+	 */
 	{ cpu_smt_mask, cpu_smt_flags, SD_INIT_NAME(SMT) },
 #endif
+/* 有定义 */
 #ifdef CONFIG_SCHED_MC
+	/*
+	 * Multi-Core ，多核。每个物理核心独享 L1 高速缓存，多个物理核心可以组成一
+	 * 个簇，簇里的 CPU 共享 L2 高速缓存
+	 */
 	{ cpu_coregroup_mask, cpu_core_flags, SD_INIT_NAME(MC) },
 #endif
+	/* SoC 级别 */
 	{ cpu_cpu_mask, SD_INIT_NAME(DIE) },
 	{ NULL, },
 };
@@ -1701,6 +1713,7 @@ void sched_domains_numa_masks_clear(unsigned int cpu)
 
 #endif /* CONFIG_NUMA */
 
+/* 初始化 sd_data(sched_domain_topology_level 的 data) */
 static int __sdt_alloc(const struct cpumask *cpu_map)
 {
 	struct sched_domain_topology_level *tl;
@@ -1806,6 +1819,7 @@ static void __sdt_free(const struct cpumask *cpu_map)
 	}
 }
 
+/* 初始化某个 CPU 的某个 SDTL 层级的调度域 */
 static struct sched_domain *build_sched_domain(struct sched_domain_topology_level *tl,
 		const struct cpumask *cpu_map, struct sched_domain_attr *attr,
 		struct sched_domain *child, int dflags, int cpu)
@@ -2063,7 +2077,9 @@ int sched_init_domains(const struct cpumask *cpu_map)
 	doms_cur = alloc_sched_domains(ndoms_cur);
 	if (!doms_cur)
 		doms_cur = &fallback_doms;
+	/* housekeeping_cpumask 表示管家 CPU ，其余 CPU 用于无时钟内核特性 */
 	cpumask_and(doms_cur[0], cpu_map, housekeeping_cpumask(HK_FLAG_DOMAIN));
+	/* 建立 CPU 调度域拓扑关系 */
 	err = build_sched_domains(doms_cur[0], NULL);
 	register_sched_domain_sysctl();
 

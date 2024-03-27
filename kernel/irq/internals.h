@@ -31,6 +31,7 @@ extern struct irqaction chained_action;
  * IRQTF_FORCED_THREAD  - irq action is force threaded
  */
 enum {
+	/* 表示中断线程已经在运行 */
 	IRQTF_RUNTHREAD,
 	IRQTF_WARNED,
 	IRQTF_AFFINITY,
@@ -54,6 +55,7 @@ enum {
 	IRQS_AUTODETECT		= 0x00000001,
 	IRQS_SPURIOUS_DISABLED	= 0x00000002,
 	IRQS_POLL_INPROGRESS	= 0x00000008,
+	/* 不支持中断嵌套 */
 	IRQS_ONESHOT		= 0x00000020,
 	IRQS_REPLAY		= 0x00000040,
 	IRQS_WAITING		= 0x00000080,

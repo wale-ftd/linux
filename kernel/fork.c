@@ -119,8 +119,10 @@
  * Protected counters by write_lock_irq(&tasklist_lock)
  */
 unsigned long total_forks;	/* Handle normal Linux uptimes. */
+/* 当前线程数 */
 int nr_threads;			/* The idle threads do not count.. */
 
+/* 当前系统最多可以拥有的线程数量 */
 int max_threads;		/* tunable limit on nr_threads */
 
 DEFINE_PER_CPU(unsigned long, process_counts) = 0;
@@ -199,8 +201,10 @@ static int free_vm_stack_cache(unsigned int cpu)
 }
 #endif
 
+/* 是这个 */
 static unsigned long *alloc_thread_stack_node(struct task_struct *tsk, int node)
 {
+/* 未定义 */
 #ifdef CONFIG_VMAP_STACK
 	void *stack;
 	int i;
@@ -470,6 +474,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	LIST_HEAD(uf);
 
 	uprobe_start_dup_mmap();
+    /* 因为后续会修改父进程的进程地址空间(页表)，因此要获取写信号量 */
 	if (down_write_killable(&oldmm->mmap_sem)) {
 		retval = -EINTR;
 		goto fail_uprobe_end;
@@ -500,6 +505,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		goto out;
 
 	prev = NULL;
+    /* 遍历父进程所有的 VMA */
 	for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) {
 		struct file *file;
 
@@ -523,6 +529,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 				goto fail_nomem;
 			charge = len;
 		}
+        /* 新建一个临时用的 VMA 数据结构 tmp ，复制父进程 VMA 的内容到 tmp */
 		tmp = vm_area_dup(mpnt);
 		if (!tmp)
 			goto fail_nomem;
@@ -538,7 +545,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 			tmp->anon_vma = NULL;
 			if (anon_vma_prepare(tmp))
 				goto fail_nomem_anon_vma_fork;
-		} else if (anon_vma_fork(tmp, mpnt))
+		} else if (anon_vma_fork(tmp, mpnt))  /* 为子进程创建相应的 anon_vma */
 			goto fail_nomem_anon_vma_fork;
 		tmp->vm_flags &= ~(VM_LOCKED | VM_LOCKONFAULT);
 		tmp->vm_next = tmp->vm_prev = NULL;
@@ -577,12 +584,14 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		tmp->vm_prev = prev;
 		prev = tmp;
 
+        /* 把 tmp 添加到子进程的红黑树中 */
 		__vma_link_rb(mm, tmp, rb_link, rb_parent);
 		rb_link = &tmp->vm_rb.rb_right;
 		rb_parent = &tmp->vm_rb;
 
 		mm->map_count++;
 		if (!(tmp->vm_flags & VM_WIPEONFORK))
+            /* 复制父进程的 PTE 到子进程页表中 */
 			retval = copy_page_range(mm, oldmm, mpnt);
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
@@ -833,6 +842,7 @@ void set_task_stack_end_magic(struct task_struct *tsk)
 	*stackend = STACK_END_MAGIC;	/* for overflow detection */
 }
 
+/* 为新进程分配一个进程描述符和内核栈 */
 static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 {
 	struct task_struct *tsk;
@@ -1005,6 +1015,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 		mm->def_flags = 0;
 	}
 
+    /* 每个进程在创建时都新建一级页表 */
 	if (mm_alloc_pgd(mm))
 		goto fail_nopgd;
 
@@ -1317,6 +1328,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 
+    /* 复制父进程的进程地址空间的页表到子进程 */
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;
@@ -1797,10 +1809,16 @@ static __latent_entropy struct task_struct *copy_process(
 		goto bad_fork_cleanup_count;
 
 	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+    /* PF_IDLE 表示新创建的进程处于空闲状态 */
 	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER | PF_IDLE);
+    /* 这个进程暂时还不能执行 */
 	p->flags |= PF_FORKNOEXEC;
 	INIT_LIST_HEAD(&p->children);
 	INIT_LIST_HEAD(&p->sibling);
+    /*
+     * 对子进程 task_struct 的成员进行初始化。之前的值是从父进程复制过来的，作为
+     * 子进程，有些成员需要重新初始化
+     */
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
 	spin_lock_init(&p->alloc_lock);
@@ -1902,6 +1920,7 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = copy_semundo(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_security;
+    /* 复制父进程打开的文件等信息 */
 	retval = copy_files(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_semundo;
@@ -1923,6 +1942,7 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = copy_io(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_namespaces;
+    /* 复制父进程的内核栈信息(包括寄存器信息) */
 	retval = copy_thread_tls(clone_flags, stack_start, stack_size, p, tls);
 	if (retval)
 		goto bad_fork_cleanup_io;
@@ -1968,10 +1988,12 @@ static __latent_entropy struct task_struct *copy_process(
 	/* ok, now we should be set up.. */
 	p->pid = pid_nr(pid);
 	if (clone_flags & CLONE_THREAD) {
+    /* 子进程和父进程属于同一线程组 */
 		p->exit_signal = -1;
 		p->group_leader = current->group_leader;
 		p->tgid = current->tgid;
 	} else {
+    /* 子进程是线程组的领头进程 */
 		if (clone_flags & CLONE_PARENT)
 			p->exit_signal = current->group_leader->exit_signal;
 		else
@@ -2055,6 +2077,7 @@ static __latent_entropy struct task_struct *copy_process(
 		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
 
 		init_task_pid(p, PIDTYPE_PID, pid);
+        /* 根据 新进程是否是线程组的领头进程 添加到不同的进程管理流程中 */
 		if (thread_group_leader(p)) {
 			init_task_pid(p, PIDTYPE_TGID, pid);
 			init_task_pid(p, PIDTYPE_PGID, task_pgrp(current));
@@ -2241,6 +2264,7 @@ long _do_fork(unsigned long clone_flags,
 	nr = pid_vnr(pid);
 
 	if (clone_flags & CLONE_PARENT_SETTID)
+		/* 把新线程的进程标识符写到参数 parent_tidptr 指定的位置 */
 		put_user(nr, parent_tidptr);
 
 	if (clone_flags & CLONE_VFORK) {
@@ -2300,6 +2324,11 @@ SYSCALL_DEFINE0(fork)
 #endif
 
 #ifdef __ARCH_WANT_SYS_VFORK
+/*
+ * 用于创建子进程，之后子进程立即调用 execve 以装载新程序的情况。为了避免复制物理
+ * 页， 父进程会睡眠等待子进程装载新程序。 现在 fork 采用了写时复制的技术，vfork
+ * 失去了速度优势，已经被废弃。
+ */
 SYSCALL_DEFINE0(vfork)
 {
 	return _do_fork(CLONE_VFORK | CLONE_VM | SIGCHLD, 0,
@@ -2325,6 +2354,10 @@ SYSCALL_DEFINE6(clone, unsigned long, clone_flags, unsigned long, newsp,
 		int __user *, child_tidptr,
 		unsigned long, tls)
 #else
+/*
+ * 可以精确地控制子进程和父进程共享哪些资源。这个系统调的主要用处是可供
+ * pthread 库用来创建线程。
+ */
 SYSCALL_DEFINE5(clone, unsigned long, clone_flags, unsigned long, newsp,
 		 int __user *, parent_tidptr,
 		 int __user *, child_tidptr,

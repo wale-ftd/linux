@@ -640,6 +640,7 @@ asmlinkage __visible void __init start_kernel(void)
 	context_tracking_init();
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
+	/* 中断初始化 */
 	init_IRQ();
 	tick_init();
 	rcu_init_nohz();

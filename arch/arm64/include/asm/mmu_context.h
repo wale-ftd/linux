@@ -61,6 +61,7 @@ static inline void cpu_switch_mm(pgd_t *pgd, struct mm_struct *mm)
 {
 	BUG_ON(pgd == swapper_pg_dir);
 	cpu_set_reserved_ttbr0();
+    /* arch/arm64/mm/proc.S */
 	cpu_do_switch_mm(virt_to_phys(pgd),mm);
 }
 
@@ -188,7 +189,15 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu);
 
 #define init_new_context(tsk,mm)	({ atomic64_set(&(mm)->context.id, 0); 0; })
 
+/* 未定义 */
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
+/*
+ * 如果处理器不支持 PAN 特性，那么内核通过切换寄存器 TTBR0_EL1 仿真 PAN 特性：进
+ * 程进入内核模式时把寄存器 TTBR0_EL1 设置为保留的地址空间标识符 0 和内核的页全
+ * 局目录(swapper_pg_dir)后面的保留区域的物理地址，退出内核模式时把寄存器
+ * TTBR0_EL1 设置为进程的地址空间标识符和页全局目录的物理地址。使用保留的地址空
+ * 间标识符 0 可以避免命中页表缓存的表项，防止内核访问用户虚拟地址
+ */
 static inline void update_saved_ttbr0(struct task_struct *tsk,
 				      struct mm_struct *mm)
 {
@@ -196,6 +205,12 @@ static inline void update_saved_ttbr0(struct task_struct *tsk,
 
 	if (!system_uses_ttbr0_pan())
 		return;
+
+	/*
+	 * 把进程的地址空间标识符和页全局目录的物理地址保存到进程描述符的成员
+	 * thread_info.ttbr0 ，等进程退出内核模式时使用进程描述符的成员
+	 * thread_info.ttbr0 设置寄存器 TTBR0_EL1
+	 */
 
 	if (mm == &init_mm)
 		ttbr = __pa_symbol(empty_zero_page);
@@ -229,14 +244,21 @@ static inline void __switch_mm(struct mm_struct *next)
 	 * init_mm.pgd does not contain any user mappings and it is always
 	 * active for kernel addresses in TTBR1. Just set the reserved TTBR0.
 	 */
+	/*
+	 * 目前只有一种情况需要切换到内核的内存描述符 init_mm ：内核支持处理器热
+	 * 插拔，当处理器下线时，如果空闲线程借用用户进程的内存描述符，那么必须
+	 * 切换到内核的内存描述符 init_mm (见 idle_task_exit())
+	 */
 	if (next == &init_mm) {
 		cpu_set_reserved_ttbr0();
 		return;
 	}
 
+    /* 完成与架构相关的硬件设置，如刷新 TLB 和设置硬件页表等 */
 	check_and_switch_context(next, cpu);
 }
 
+/* 把新进程的页表基地址设置到页表基地址寄存器 */
 static inline void
 switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	  struct task_struct *tsk)
@@ -249,6 +271,11 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	 * value may have not been initialised yet (activate_mm caller) or the
 	 * ASID has changed since the last run (following the context switch
 	 * of another thread of the same process).
+	 */
+	/*
+	 * 更新调入进程保存的寄存器 TTBR0_EL1 值，因为可能还没有初始化(调用者是函数
+	 * activate_mm)，或者 ASID 自从上次运行以来已经改变(在同一个线程组的另一个
+	 * 线程切换上下文以后)
 	 */
 	update_saved_ttbr0(tsk, next);
 }

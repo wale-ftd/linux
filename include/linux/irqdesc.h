@@ -56,6 +56,10 @@ struct irq_desc {
 	struct irq_common_data	irq_common_data;
 	struct irq_data		irq_data;
 	unsigned int __percpu	*kstat_irqs;
+	/*
+	 * 对于 GIC ， SPI 类型中断是 handle_fasteoi_irq() ， SGI/PPI 类型中断是
+	 * handle_percpu_devid_irq()
+	 */
 	irq_flow_handler_t	handle_irq;
 #ifdef CONFIG_IRQ_PREFLOW_FASTEOI
 	irq_preflow_handler_t	preflow_handler;
@@ -80,7 +84,9 @@ struct irq_desc {
 	cpumask_var_t		pending_mask;
 #endif
 #endif
+	/* 是一个位图，每位代表正在处理的共享 ONESHOT 类型中断的中断线程 */
 	unsigned long		threads_oneshot;
+	/* 表示正在运行的中断线程个数 */
 	atomic_t		threads_active;
 	wait_queue_head_t       wait_for_threads;
 #ifdef CONFIG_PM_SLEEP
@@ -151,6 +157,7 @@ static inline void *irq_desc_get_handler_data(struct irq_desc *desc)
  */
 static inline void generic_handle_irq_desc(struct irq_desc *desc)
 {
+	/* 对于 GIC 的 SPI 类型中断，是 handle_fasteoi_irq() */
 	desc->handle_irq(desc);
 }
 

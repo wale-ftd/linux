@@ -57,6 +57,7 @@ osq_wait_next(struct optimistic_spin_queue *lock,
 	for (;;) {
 		if (atomic_read(&lock->tail) == curr &&
 		    atomic_cmpxchg_acquire(&lock->tail, curr, old) == curr) {
+		/* 当前节点是 MCS 链表中的最后一个节点 */
 			/*
 			 * We were the last queued, we moved @lock back. @prev
 			 * will now observe @lock and will complete its
@@ -134,6 +135,10 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 	 * cmpxchg in an attempt to undo our queueing.
 	 */
 
+	/*
+	 * 查询当前 cpu 的 node->locked 是否变成了 1 ，因为前一个 node 释放锁时会
+	 * 把它的下一个 node->locked 成员设置为 1
+	 */
 	while (!READ_ONCE(node->locked)) {
 		/*
 		 * If we need to reschedule bail... so we can block.
@@ -141,12 +146,20 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 		 * lock holder:
 		 */
 		if (need_resched() || vcpu_is_preempted(node_cpu(node->prev)))
+		/*
+		 * 自旋等待过程中，有更高优先级的进程抢占或者被调度出去，应该放弃自旋
+		 * 等待，退出 MCS 链表
+		 */
 			goto unqueue;
 
 		cpu_relax();
 	}
 	return true;
 
+/*
+ * 实现删除链表等操作，这里仅使用了原子比较并交换指令，并没有使用其他的锁，体
+ * 现了无锁并发编程的精髓
+ */
 unqueue:
 	/*
 	 * Step - A  -- stabilize @prev
@@ -156,9 +169,15 @@ unqueue:
 	 * (or later).
 	 */
 
+	/* 处理前继节点的 next 指针指向问题 */
 	for (;;) {
 		if (prev->next == node &&
 		    cmpxchg(&prev->next, node, NULL) == node)
+		/*
+		 * prev->next == node ，说明上面 WRITE_ONCE(prev->next, node) 到此，
+		 * 这段时间 MCS 链表没有被修改。接着用 cmpxchg()，如果交换前
+		 * prev->next 的值为 node ，则当前节点成功获取锁
+		 */
 			break;
 
 		/*
@@ -166,7 +185,15 @@ unqueue:
 		 * in which case we should observe @node->locked becomming
 		 * true.
 		 */
+		/*
+		 * MCS 链表被修改了。再次判断当前节点是否持有了锁。 smp_load_acquire()
+		 * 会强制重新从内存加载 node->locked 的值
+		 */
 		if (smp_load_acquire(&node->locked))
+		/*
+		 * 为什么当前节点莫名其妙地持有了锁呢？因为前继节点释放了锁并且把锁传
+		 * 递给了当前节点
+		 */
 			return true;
 
 		cpu_relax();
@@ -185,6 +212,7 @@ unqueue:
 	 * back to @prev.
 	 */
 
+	/* 处理当前节点的 next 指针指向问题 */
 	next = osq_wait_next(lock, node, prev);
 	if (!next)
 		return false;
@@ -221,11 +249,18 @@ void osq_unlock(struct optimistic_spin_queue *lock)
 	node = this_cpu_ptr(&osq_node);
 	next = xchg(&node->next, NULL);
 	if (next) {
+		/* 把锁传递给后继节点 */
 		WRITE_ONCE(next->locked, 1);
 		return;
 	}
 
+	/*
+	 * 如果后继节点为空，说明在执行 osq_unlock()期间有成员擅自离队，那么只能
+	 * 调用 osq_wait_next()来确定或者等待确定的后继节点，也许当前节点就在链表
+	 * 末尾
+	 */
 	next = osq_wait_next(lock, node, NULL);
 	if (next)
+		/* 把锁传递给后继节点 */
 		WRITE_ONCE(next->locked, 1);
 }

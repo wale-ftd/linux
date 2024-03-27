@@ -440,10 +440,14 @@ static void __init add_huge_page_size(unsigned long size)
 static int __init hugetlbpage_init(void)
 {
 #ifdef CONFIG_ARM64_4K_PAGES
+	/* 1G */
 	add_huge_page_size(PUD_SIZE);
 #endif
+	/* 32M */
 	add_huge_page_size(PMD_SIZE * CONT_PMDS);
+	/* 2M */
 	add_huge_page_size(PMD_SIZE);
+	/* 64K */
 	add_huge_page_size(PAGE_SIZE * CONT_PTES);
 
 	return 0;

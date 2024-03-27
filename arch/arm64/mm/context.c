@@ -30,7 +30,9 @@
 static u32 asid_bits;
 static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
 
+/* [31:asid_bis] 存放软件管理用的软件 generation 计数 */
 static atomic64_t asid_generation;
+/* 硬件 ASID 通过位图来管理 */
 static unsigned long *asid_map;
 
 static DEFINE_PER_CPU(atomic64_t, active_asids);
@@ -40,7 +42,9 @@ static cpumask_t tlb_flush_pending;
 #define ASID_MASK		(~GENMASK(asid_bits - 1, 0))
 #define ASID_FIRST_VERSION	(1UL << asid_bits)
 
+/* 有定义 */
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
+/* 使能 KPTI 后，每个进程要用两个 asid ，所以 asid 的总数会减半 */
 #define NUM_USER_ASIDS		(ASID_FIRST_VERSION >> 1)
 #define asid2idx(asid)		(((asid) & ~ASID_MASK) >> 1)
 #define idx2asid(idx)		(((idx) << 1) & ~ASID_MASK)
@@ -88,6 +92,7 @@ void verify_cpu_asid_bits(void)
 	}
 }
 
+/* 把 asid_map 清零，刷新所有 CPU 上的 TLB */
 static void flush_context(void)
 {
 	int i;
@@ -148,6 +153,10 @@ static u64 new_context(struct mm_struct *mm)
 	u64 asid = atomic64_read(&mm->context.id);
 	u64 generation = atomic64_read(&asid_generation);
 
+    /*
+     * 刚创建进程时， mm->context.id 值初始化为 0 。如果这时 ASID 不为 0，
+     * 说明该进程已经分配过 ASID
+     */
 	if (asid != 0) {
 		u64 newasid = generation | (asid & ~ASID_MASK);
 
@@ -155,12 +164,22 @@ static u64 new_context(struct mm_struct *mm)
 		 * If our current ASID was active during a rollover, we
 		 * can continue to use it and this was just a false alarm.
 		 */
+        /*
+         * 如果原来的 ASID 还有效(通过 check_update_reserved_asid()判断)，只
+         * 需要再加上新的 generation 值即可组成一个新的软件 ASID 。
+         */
 		if (check_update_reserved_asid(asid, newasid))
 			return newasid;
 
 		/*
 		 * We had a valid ASID in a previous life, so try to re-use
 		 * it if possible.
+		 */
+		/*
+		 * 如果之前的硬件 ASID 不能使用，那么从 asid_map 中查找第一个空闲的位
+		 * 并将其作为这次的硬件 ASID 。注意： 0 号的 ASID 预留给 init_mm 使用。
+         * 另外，在使能了 CONFIG_UNMAP_KERNEL_AT_EL0 配置的内核里为每个进程分
+         * 配两个 ASID ，即奇、偶数组配成一对。
 		 */
 		if (!__test_and_set_bit(asid2idx(asid), asid_map))
 			return newasid;
@@ -177,9 +196,11 @@ static u64 new_context(struct mm_struct *mm)
 	if (asid != NUM_USER_ASIDS)
 		goto set_asid;
 
+    /* 发生了溢出，提升 generation 值 */
 	/* We're out of ASIDs, so increment the global generation count */
 	generation = atomic64_add_return_relaxed(ASID_FIRST_VERSION,
 						 &asid_generation);
+    /* 把 asid_map 清零，刷新所有 CPU 上的 TLB */
 	flush_context();
 
 	/* We have more ASIDs than CPUs, so this will always succeed */
@@ -191,6 +212,7 @@ set_asid:
 	return idx2asid(asid) | generation;
 }
 
+/* 完成与架构相关的硬件设置，如刷新 TLB 和设置硬件页表等 */
 void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 {
 	unsigned long flags;
@@ -198,6 +220,17 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 
 	if (system_supports_cnp())
 		cpu_set_reserved_ttbr0();
+
+    /*
+     * 什么是 ASID ? 有什么用 ？
+     * 为了支持进程独有类型的 TLB ，ARM 架构出现了一种硬件解决方案，叫作进程
+     * 地址空间 ID(ASID)， TLB 可以识别哪些 TLB 项是属于某个进程的。 ASID 方
+     * 案让每一个 TLB 表项包含一个 ASID ， ASID 用于标识每个进程的地址空间，
+     * TLB 命中查询的标准在原来的虚拟地址判断之上，再加上 ASID 条件。因此有
+     * 了 ASID 硬件机制的支持，进程切换不需要刷新整个 TLB ，即使 next 进程访
+     * 问了相同的虚拟地址， prev 进程缓存的 TLB 项也不会影响到 next 进程，因
+     * 为 ASID 机制从硬件上保证了 prev 进程的 next 进程的 TLB 不会产生冲突。
+     */
 
 	asid = atomic64_read(&mm->context.id);
 
@@ -217,19 +250,32 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 	 */
 	old_active_asid = atomic64_read(&per_cpu(active_asids, cpu));
 	if (old_active_asid &&
+        /* 异或来判断两个值是否相等 */
 	    !((asid ^ atomic64_read(&asid_generation)) >> asid_bits) &&
+	    /* 设置新的 ASID 到 active_asids 中 */
 	    atomic64_cmpxchg_relaxed(&per_cpu(active_asids, cpu),
 				     old_active_asid, asid))
+        /*
+         * 全局原子变量 asid_generation 存储的软件 generation 计数和进程内
+         * 存描述符存储的软件 generation 计数相同，说明换入进程的 ASID 还
+         * 依然属于同一个批次，也就是说，还没有发生 ASID 硬件溢出，因此切
+         * 换进程不需要任何的 TLB 刷新操作
+         */
 		goto switch_mm_fastpath;
 
 	raw_spin_lock_irqsave(&cpu_asid_lock, flags);
 	/* Check that our ASID belongs to the current generation. */
 	asid = atomic64_read(&mm->context.id);
+    /*
+     * 重新做一次软件 generation 计数的比较，如果还是不相同，说明至少发生了
+     * 一次 ASID 硬件溢出，需要分配一个新的软件 ASID 计数
+     */
 	if ((asid ^ atomic64_read(&asid_generation)) >> asid_bits) {
 		asid = new_context(mm);
 		atomic64_set(&mm->context.id, asid);
 	}
 
+    /* ASID 硬件溢出，需要刷新本地的 TLB */
 	if (cpumask_test_and_clear_cpu(cpu, &tlb_flush_pending))
 		local_flush_tlb_all();
 
@@ -245,6 +291,7 @@ switch_mm_fastpath:
 	 * emulating PAN.
 	 */
 	if (!system_uses_ttbr0_pan())
+        /* 进行页表的切换 */
 		cpu_switch_mm(mm->pgd, mm);
 }
 

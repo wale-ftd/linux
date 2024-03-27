@@ -53,10 +53,13 @@
  * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area.
  */
 
+/* == 1 << 48 */
 #define DEFAULT_MAP_WINDOW_64	(UL(1) << VA_BITS)
+/* == 1 << 48 */
 #define TASK_SIZE_64		(UL(1) << vabits_user)
 
 #ifdef CONFIG_COMPAT
+/* 支持执行32位用户空间程序 */
 #define TASK_SIZE_32		UL(0x100000000)
 #define TASK_SIZE		(test_thread_flag(TIF_32BIT) ? \
 				TASK_SIZE_32 : TASK_SIZE_64)
@@ -74,11 +77,20 @@
 #define TASK_UNMAPPED_BASE	(PAGE_ALIGN(TASK_SIZE / 4))
 #else
 #define STACK_TOP_MAX		DEFAULT_MAP_WINDOW_64
+/*
+ * 对于 32 位应用为 1 << 30
+ * 对于 64 位应用为 1 << 46
+ */
 #define TASK_UNMAPPED_BASE	(PAGE_ALIGN(DEFAULT_MAP_WINDOW / 4))
 #endif /* CONFIG_ARM64_FORCE_52BIT */
 
 #ifdef CONFIG_COMPAT
+/* 如果是 32 位用户空间程序， STACK_TOP 的值是异常向量的基准地址 0xFFFF0000 */
 #define AARCH32_VECTORS_BASE	0xffff0000
+/*
+ * 对于 32 位应用为 0xffff0000
+ * 对于 64 位应用为 1 << 48
+ */
 #define STACK_TOP		(test_thread_flag(TIF_32BIT) ? \
 				AARCH32_VECTORS_BASE : STACK_TOP_MAX)
 #else
@@ -86,6 +98,7 @@
 #endif /* CONFIG_COMPAT */
 
 #ifndef CONFIG_ARM64_FORCE_52BIT
+/* 是这个 */
 #define arch_get_mmap_end(addr) ((addr > DEFAULT_MAP_WINDOW) ? TASK_SIZE :\
 				DEFAULT_MAP_WINDOW)
 
@@ -110,6 +123,16 @@ struct debug_info {
 #endif
 };
 
+/*
+ * 保存硬件上下文。对于 ARM64 处理器来说，在进程切换时，需要把 prev 进程的
+ * 下面寄存器保存到 cpu_context 中，然后把 next 进程中上一次保存的
+ * cpu_context 的值恢复到实际硬件的寄存器中，这样就完成了进程上下文切换。
+ *
+ * 为什么只保存这些寄存器的值？根据 ARM64 架构函数调用的标准和规范，这些寄
+ * 存器在函数调用过程中是需要保存到栈里的，因为它们是函数调用者和被调用者共
+ * 用的数据，而 X0~X7 寄存器用于传递函数参数，剩余通用寄存器大多数用作临时
+ * 寄存器，他们在进程切换过程中不需要保存。
+ */
 struct cpu_context {
 	unsigned long x19;
 	unsigned long x20;
@@ -123,10 +146,20 @@ struct cpu_context {
 	unsigned long x28;
 	unsigned long fp;
 	unsigned long sp;
+	/*
+	 * 进程的返回地址分为以下两种情况：
+	 *   1.如果进程是刚刚创建的新进程，函数 copy_thread 把进程描述符的成员
+	 *     thread.cpu_context.pc 设置为函数 ret_from_fork 的地址。
+	 *   2.对于其他情况，返回地址是函数 context_switch 中调用函数
+	 *     cpu_switch_to 之后的一行代码："last = 函数 cpu_switch_to 的返回
+	 *     值"。当进程被切换出去的时候，把这个返回地址记录在进程描述符的成
+	 *     员 thread.cpu_context.pc 中。
+	 */
 	unsigned long pc;
 };
 
 struct thread_struct {
+    /* 保存进程上下文的相关信息到 CPU 的相关通用寄存器中 */
 	struct cpu_context	cpu_context;	/* cpu context */
 
 	/*
@@ -136,7 +169,9 @@ struct thread_struct {
 	 */
 	struct {
 		unsigned long	tp_value;	/* TLS register */
+        /* TLS 寄存器 */
 		unsigned long	tp2_value;
+        /* FP 和 SIMD 相关的状态 */
 		struct user_fpsimd_state fpsimd_state;
 	} uw;
 
@@ -144,7 +179,9 @@ struct thread_struct {
 	void			*sve_state;	/* SVE registers, if any */
 	unsigned int		sve_vl;		/* SVE vector length */
 	unsigned int		sve_vl_onexec;	/* SVE vl after next exec */
+    /* 发生异常时的地址，见 set_thread_esr() */
 	unsigned long		fault_address;	/* fault info */
+    /* 异常错误值，从 ESR_EL1 中读出 */
 	unsigned long		fault_code;	/* ESR_EL1 value */
 	struct debug_info	debug;		/* debugging */
 #ifdef CONFIG_ARM64_PTR_AUTH

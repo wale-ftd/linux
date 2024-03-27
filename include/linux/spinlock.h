@@ -174,9 +174,14 @@ do {								\
  extern int do_raw_spin_trylock(raw_spinlock_t *lock);
  extern void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock);
 #else
+/* 是这个 */
 static inline void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock)
 {
 	__acquire(lock);
+	/*
+	 * linux-2.6.25 以后使用基于排队的 FIFO 算法，第 1 版的排队自旋锁可以
+	 * 参考 linux-4.0 ，第 2 版的排队自旋锁(即 qspinlock)可以参考 linux-5.0
+	 */
 	arch_spin_lock(&lock->raw_lock);
 }
 
@@ -211,6 +216,7 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
  */
 #define raw_spin_trylock(lock)	__cond_lock(lock, _raw_spin_trylock(lock))
 
+/* _raw_spin_lock 定义在 include\linux\spinlock_api_smp.h */
 #define raw_spin_lock(lock)	_raw_spin_lock(lock)
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC

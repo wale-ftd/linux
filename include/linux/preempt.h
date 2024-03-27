@@ -47,10 +47,12 @@
 #define NMI_MASK	(__IRQ_MASK(NMI_BITS)     << NMI_SHIFT)
 
 #define PREEMPT_OFFSET	(1UL << PREEMPT_SHIFT)
+/* 1 << 8 */
 #define SOFTIRQ_OFFSET	(1UL << SOFTIRQ_SHIFT)
 #define HARDIRQ_OFFSET	(1UL << HARDIRQ_SHIFT)
 #define NMI_OFFSET	(1UL << NMI_SHIFT)
 
+/* 1 << 9 */
 #define SOFTIRQ_DISABLE_OFFSET	(2 * SOFTIRQ_OFFSET)
 
 #define PREEMPT_DISABLED	(PREEMPT_DISABLE_OFFSET + PREEMPT_ENABLED)
@@ -138,6 +140,10 @@
  * held spinlocks in non-preemptible kernels.  Thus it should not be
  * used in the general case to determine whether sleeping is possible.
  * Do not use in_atomic() in driver code.
+ */
+/* 以下情况， preempt_count 不为零：
+ *   1. 内核正在执行中断处理程序
+ *   2. 内核在禁止内核抢占的情况下执行临界区代码
  */
 #define in_atomic()	(preempt_count() != 0)
 

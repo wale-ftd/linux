@@ -110,6 +110,7 @@ void show_swap_cache_info(void)
  * add_to_swap_cache resembles add_to_page_cache_locked on swapper_space,
  * but sets SwapCache flag and private instead of mapping and index.
  */
+/* swap cache 是指将 page 加入到 swap_address_space 中，类似于 page cache 。 */
 int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp)
 {
 	struct address_space *address_space = swap_address_space(entry);
@@ -122,6 +123,7 @@ int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp)
 	VM_BUG_ON_PAGE(!PageSwapBacked(page), page);
 
 	page_ref_add(page, nr);
+	/* 设置 PG_swapcache */
 	SetPageSwapCache(page);
 
 	do {
@@ -131,7 +133,9 @@ int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp)
 			goto unlock;
 		for (i = 0; i < nr; i++) {
 			VM_BUG_ON_PAGE(xas.xa_index != idx + i, page);
+			/* 把 swap entry 存放到 page->private */
 			set_page_private(page + i, entry.val + i);
+			/* 把 page 放入 swap cache */
 			xas_store(&xas, page + i);
 			xas_next(&xas);
 		}
@@ -192,6 +196,7 @@ int add_to_swap(struct page *page)
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	VM_BUG_ON_PAGE(!PageUptodate(page), page);
 
+	/* 分配 swap slot */
 	entry = get_swap_page(page);
 	if (!entry.val)
 		return 0;
@@ -225,6 +230,7 @@ int add_to_swap(struct page *page)
 	 * is swap in later. Always setting the dirty bit for the page solves
 	 * the problem.
 	 */
+	/* 设置 PG_dirty */
 	set_page_dirty(page);
 
 	return 1;
@@ -581,6 +587,7 @@ int init_swap_address_space(unsigned int type, unsigned long nr_pages)
 	struct address_space *spaces, *space;
 	unsigned int i, nr;
 
+	/* 计算该 swap 分区需要多少个 64M 大小的 address_space */
 	nr = DIV_ROUND_UP(nr_pages, SWAP_ADDRESS_SPACE_PAGES);
 	spaces = kvcalloc(nr, sizeof(struct address_space), GFP_KERNEL);
 	if (!spaces)
@@ -703,11 +710,13 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 	bool page_allocated;
 	struct vma_swap_readahead ra_info = {0,};
 
+	/* 获取预读大小信息，由是否命中以及 page_cluster 等确定 */
 	swap_ra_info(vmf, &ra_info);
 	if (ra_info.win == 1)
 		goto skip;
 
 	blk_start_plug(&plug);
+	/* 对要预读的大小的 vma 地址进行预读 */
 	for (i = 0, pte = ra_info.ptes; i < ra_info.nr_pte;
 	     i++, pte++) {
 		pentry = *pte;
@@ -718,11 +727,16 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 		entry = pte_to_swp_entry(pentry);
 		if (unlikely(non_swap_entry(entry)))
 			continue;
+		/*
+		 * 分配新 page ，加到 swap cache ，设置 PG_swapcache ，更新 entry
+		 * 到 page->private
+		 */
 		page = __read_swap_cache_async(entry, gfp_mask, vma,
 					       vmf->address, &page_allocated);
 		if (!page)
 			continue;
 		if (page_allocated) {
+			/* 发起 swapin 的 IO 读请求 */
 			swap_readpage(page, false);
 			if (i != ra_info.offset) {
 				SetPageReadahead(page);
@@ -732,6 +746,10 @@ static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 		put_page(page);
 	}
 	blk_finish_plug(&plug);
+	 /*
+	  * __read_swap_cache_asynck()会将 new page 加入到 lru pagevec 中，这
+	  * 里将 pagevec 刷到全局 LRU 链表中
+	  */
 	lru_add_drain();
 skip:
 	return read_swap_cache_async(fentry, gfp_mask, vma, vmf->address,

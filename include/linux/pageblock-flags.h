@@ -27,16 +27,33 @@
 
 #define PB_migratetype_bits 3
 /* Bit indices that affect a whole block of pages */
+/* set_pageblock_flags_group()/get_pageblock_flags_group()管理迁移类型 */
 enum pageblock_bits {
 	PB_migrate,
 	PB_migrate_end = PB_migrate + PB_migratetype_bits - 1,
 			/* 3 bits required for migrate types */
+    /*
+     * 以下情况下会设置：
+     *   1. 在隔离空闲页面 isolate_freepages 时，当整个 pageblock 都被扫描完
+     *      了，即开始隔离的起始点 isolate_start_pfn 等于 pageblock 的结束点，
+     *      那么当前的 pageblock 会被设置成 SKIP 状态。因为下一次扫描时大概率
+     *      还是会找不到合适的页面，不如直接跳过。
+     *   2. 在快速隔离 freepages 中 fast_isolate_around()，如果拓展扫描了整个
+     *      pageblock ，但是隔离出来的空闲页面 nr_feepages 还是小于待迁移页面
+     *      的数量 nr_migratepages ，也是会将该 pageblock 设置成 SKIP 状态，
+     *      花了半天的功夫没隔离出几个空闲的页面，徒劳无功。
+     *   3. 在快速隔离迁移页面 fast_find_migrateblock()时，如果待扫描的起始页
+     *      面的页帧号大于(free scanner 的初始扫描值 free_pfn -
+     *      migrate scanner 的初始扫描值 migrate_pfn)的 1/2 或者 1/8 ，也会将
+     *      该 pageblock 设置成 SKIP 的状态。
+     */
 	PB_migrate_skip,/* If set the block is skipped by compaction */
 
 	/*
 	 * Assume the bits will always align on a word. If this assumption
 	 * changes then get/set pageblock needs updating.
 	 */
+	/* == 4 */
 	NR_PAGEBLOCK_BITS
 };
 

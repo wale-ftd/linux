@@ -38,6 +38,7 @@
 	msr	daifset, #0xf
 	.endm
 
+    /* 关闭本地处理器的中断 */
 	.macro disable_daif
 	msr	daifset, #0xf
 	.endm

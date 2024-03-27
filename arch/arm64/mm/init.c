@@ -58,6 +58,7 @@
  * executes, which assigns it its actual value. So use a default value
  * that cannot be mistaken for a real physical address.
  */
+/* 记录内存的起始物理地址 */
 s64 memstart_addr __ro_after_init = -1;
 EXPORT_SYMBOL(memstart_addr);
 
@@ -212,6 +213,7 @@ static phys_addr_t __init max_zone_dma_phys(void)
 
 #ifdef CONFIG_NUMA
 
+/* 是这个 */
 static void __init zone_sizes_init(unsigned long min, unsigned long max)
 {
 	unsigned long max_zone_pfns[MAX_NR_ZONES]  = {0};
@@ -357,6 +359,10 @@ void __init arm64_memblock_init(void)
 	const s64 linear_region_size = -(s64)PAGE_OFFSET;
 
 	/* Handle linux,usable-memory-range property */
+	/*
+	 * 解析设备树二进制文件中节点 /chosen 的属性 linux,usable-memory-range ，得
+	 * 到可用内存的范围，把超出这个范围的物理内存范围从 memblock.memory 中删除
+	 */
 	fdt_enforce_memory_region();
 
 	/* Remove memory above our supported physical address size */
@@ -372,6 +378,7 @@ void __init arm64_memblock_init(void)
 	/*
 	 * Select a suitable value for the base of physical memory.
 	 */
+	/* 记录内存的起始物理地址 */
 	memstart_addr = round_down(memblock_start_of_DRAM(),
 				   ARM64_MEMSTART_ALIGN);
 
@@ -380,6 +387,7 @@ void __init arm64_memblock_init(void)
 	 * linear mapping. Take care not to clip the kernel which may be
 	 * high in memory.
 	 */
+	/* 把线性映射区域不能覆盖的物理内存范围从 memblock.memory 中删除 */
 	memblock_remove(max_t(u64, memstart_addr + linear_region_size,
 			__pa_symbol(_end)), ULLONG_MAX);
 	if (memstart_addr + linear_region_size < memblock_end_of_DRAM()) {
@@ -393,6 +401,13 @@ void __init arm64_memblock_init(void)
 	 * Apply the memory limit if it was set. Since the kernel may be loaded
 	 * high up in memory, add back the kernel region that must be accessible
 	 * via the linear mapping.
+	 */
+	/*
+	 * 设备树二进制文件中节点 /chosen 的属性 bootargs 指定的命令行中，可以使用参
+	 * 数 mem 指定可用内存的大小。如果指定了内存的大小，那么把超过可用长度的物理
+	 * 内存范围从 memblock.memory 中删除。因为内核镜像可以被加载到内存的高地址部
+	 * 分，并且内核镜像必须是可以通过线性映射区域访问的，所以需要把内核镜像占用
+	 * 的物理内存范围重新添加到 memblock.memory 中。
 	 */
 	if (memory_limit != PHYS_ADDR_MAX) {
 		memblock_mem_limit_remove_map(memory_limit);
@@ -449,6 +464,7 @@ void __init arm64_memblock_init(void)
 	 * Register the kernel text, kernel data, initrd, and initial
 	 * pagetables with memblock.
 	 */
+	/* 把内核镜像占用的物理内存范围添加到 memblock.reserved 中 */
 	memblock_reserve(__pa_symbol(_text), _end - _text);
 	if (IS_ENABLED(CONFIG_BLK_DEV_INITRD) && phys_initrd_size) {
 		/* the generic initrd code expects virtual addresses */
@@ -456,6 +472,11 @@ void __init arm64_memblock_init(void)
 		initrd_end = initrd_start + phys_initrd_size;
 	}
 
+	/*
+	 * 从设备树二进制文件中的内存保留区域(memory reserve map ，对应设备树源文件
+	 * 的字段 /memreserve/)和节点 /reserved-memory 读取保留的物理内存范围，添加
+	 * 到 memblock.reserved 中
+	 */
 	early_init_fdt_scan_reserved_mem();
 
 	/* 4GB maximum for 32-bit only capable devices */
@@ -589,6 +610,78 @@ void __init mem_init(void)
 	kexec_reserve_crashkres_pages();
 
 	mem_init_print_info(NULL);
+
+#define MLK(b, t) b, t, ((t) - (b)) >> 10
+#define MLM(b, t) b, t, ((t) - (b)) >> 20
+#define MLG(b, t) b, t, ((t) - (b)) >> 30
+#define MLK_ROUNDUP(b, t) b, t, DIV_ROUND_UP(((t) - (b)), SZ_1K)
+
+/*
+[    0.000000] Virtual kernel memory layout:
+[    0.000000]     modules : 0xffff000008000000 - 0xffff000010000000   (   128 MB)
+[    0.000000]     vmalloc : 0xffff000010000000 - 0xffff7dffbfff0000   (129022 GB)
+[    0.000000]       .text : 0xffff000010080000 - 0xffff000011910000   ( 25152 KB)
+[    0.000000]       .init : 0xffff000011c30000 - 0xffff0000120c0000   (  4672 KB)
+[    0.000000]     .rodata : 0xffff000011910000 - 0xffff000011c19000   (  3108 KB)
+[    0.000000]       .data : 0xffff0000120c0000 - 0xffff0000121d6200   (  1113 KB)
+[    0.000000]        .bss : 0xffff0000121d6200 - 0xffff00001226bd70   (   599 KB)
+[    0.000000]     fixed   : 0xffff7dfffe7f9000 - 0xffff7dfffec00000   (  4124 KB)
+[    0.000000]     PCI I/O : 0xffff7dfffee00000 - 0xffff7dffffe00000   (    16 MB)
+[    0.000000]     vmemmap : 0xffff7e0000000000 - 0xffff800000000000   (  2048 GB maximum)
+[    0.000000]               0xffff7e0000000000 - 0xffff7e0001000000   (    16 MB actual)
+[    0.000000]     memory  : 0xffff800000000000 - 0xffff800040000000   (  1024 MB)
+[    0.000000]     PAGE_OFFSET  : 0xffff800000000000
+[    0.000000]     kimage_voffset : 0xfffeffffd0000000
+[    0.000000]     PHYS_OFFSET  : 0x40000000
+[    0.000000]     start memory  : 0x40000000
+ * 由此可见，内核映像文件映射的区域是在 vmalloc 区域里，这是为了实现 KASLR 特性而做
+ * 的改变
+ */
+
+	pr_notice("Virtual kernel memory layout:\n");
+#ifdef CONFIG_KASAN
+	pr_notice("    kasan   : 0x%16lx - 0x%16lx   (%6ld GB)\n",
+		MLG(KASAN_SHADOW_START, KASAN_SHADOW_END));
+#endif
+	pr_notice("    modules : 0x%16lx - 0x%16lx   (%6ld MB)\n",
+		MLM(MODULES_VADDR, MODULES_END));
+	pr_notice("    vmalloc : 0x%16lx - 0x%16lx   (%6ld GB)\n",
+		MLG(VMALLOC_START, VMALLOC_END));
+	pr_notice("      .text : 0x%16llx" " - 0x%16llx" "   (%6lld KB)\n",
+		MLK_ROUNDUP((u64)_text, (u64)_etext));
+	pr_notice("      .init : 0x%16llx" " - 0x%16llx" "   (%6lld KB)\n",
+		MLK_ROUNDUP((u64)__init_begin, (u64)__init_end));
+	pr_notice("    .rodata : 0x%16llx" " - 0x%16llx" "   (%6lld KB)\n",
+		MLK_ROUNDUP((u64)__start_rodata, (u64)__end_rodata));
+	pr_notice("      .data : 0x%16llx" " - 0x%16llx" "   (%6lld KB)\n",
+		MLK_ROUNDUP((u64)_sdata, (u64)_edata));
+	pr_notice("       .bss : 0x%16llx" " - 0x%16llx" "   (%6lld KB)\n",
+		MLK_ROUNDUP((u64)__bss_start, (u64)__bss_stop));
+	pr_notice("    fixed   : 0x%16lx - 0x%16lx   (%6ld KB)\n",
+		MLK(FIXADDR_START, FIXADDR_TOP));
+	pr_notice("    PCI I/O : 0x%16lx - 0x%16lx   (%6ld MB)\n",
+		MLM(PCI_IO_START, PCI_IO_END));
+#ifdef CONFIG_SPARSEMEM_VMEMMAP
+	pr_notice("    vmemmap : 0x%16lx - 0x%16lx   (%6ld GB maximum)\n",
+		MLG(VMEMMAP_START, VMEMMAP_START + VMEMMAP_SIZE));
+	pr_notice("              0x%16lx - 0x%16lx   (%6ld MB actual)\n",
+		MLM((unsigned long)phys_to_page(memblock_start_of_DRAM()),
+		    (unsigned long)virt_to_page(high_memory)));
+#endif
+	/* 线性映射区 */
+	pr_notice("    memory  : 0x%16lx - 0x%16lx   (%6ld MB)\n",
+		MLM(__phys_to_virt(memblock_start_of_DRAM()),
+		    (unsigned long)high_memory));
+	pr_notice("    PAGE_OFFSET  : 0x%16lx\n",
+		PAGE_OFFSET);
+	pr_notice("    kimage_voffset : 0x%16llx\n", kimage_voffset);
+	pr_notice("    PHYS_OFFSET  : 0x%llx\n", PHYS_OFFSET);
+	pr_notice("    start memory  : 0x%llx\n",
+		memblock_start_of_DRAM());
+
+#undef MLK
+#undef MLM
+#undef MLK_ROUNDUP
 
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can be

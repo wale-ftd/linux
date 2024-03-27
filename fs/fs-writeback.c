@@ -1346,6 +1346,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 
 	trace_writeback_single_inode_start(inode, wbc, nr_to_write);
 
+	/* 回写数据 */
 	ret = do_writepages(mapping, wbc);
 
 	/*
@@ -1356,6 +1357,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 	 * inode metadata is written back correctly.
 	 */
 	if (wbc->sync_mode == WB_SYNC_ALL && !wbc->for_sync) {
+		/* 以页为单位等待数据回写完成 */
 		int err = filemap_fdatawait(mapping);
 		if (ret == 0)
 			ret = err;
@@ -1405,6 +1407,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 		mark_inode_dirty_sync(inode);
 	/* Don't write the inode if only I_DIRTY_PAGES was set */
 	if (dirty & ~I_DIRTY_PAGES) {
+		/* 回写元数据 */
 		int err = write_inode(inode, wbc);
 		if (ret == 0)
 			ret = err;
@@ -1638,6 +1641,7 @@ static long writeback_sb_inodes(struct super_block *sb,
 		if (!(inode->i_state & I_DIRTY_ALL))
 			wrote++;
 		requeue_inode(inode, tmp_wb, &wbc);
+		/* 唤醒等待 inode 的进程 */
 		inode_sync_complete(inode);
 		spin_unlock(&inode->i_lock);
 

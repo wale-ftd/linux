@@ -6,6 +6,7 @@
  * cloning flags:
  */
 #define CSIGNAL		0x000000ff	/* signal mask to be sent at exit */
+/* 如调用 vfork()创建子进程 */
 #define CLONE_VM	0x00000100	/* set if VM shared between processes */
 #define CLONE_FS	0x00000200	/* set if fs info shared between processes */
 #define CLONE_FILES	0x00000400	/* set if open files shared between processes */
@@ -33,11 +34,17 @@
 /*
  * Scheduling policies
  */
+/* 以前称为 SCHED_OTHER */
 #define SCHED_NORMAL		0
 #define SCHED_FIFO		1
 #define SCHED_RR		2
+/*
+ * 让调度器认为该进程是 CPU 消耗型的。因此，调度器对这类进程的唤醒处罚(wakeup
+ * penalty) 比较小
+ */
 #define SCHED_BATCH		3
 /* SCHED_ISO: reserved but not implemented yet */
+/* 用于运行低优先级的任务 */
 #define SCHED_IDLE		5
 #define SCHED_DEADLINE		6
 

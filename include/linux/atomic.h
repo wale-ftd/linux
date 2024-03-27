@@ -480,6 +480,10 @@
 	likely(__r == __o);						\
 })
 
+/*
+ * 用于测试是否可以交换。与 atomic_cmpxchg() 类似，只是返回值是 bool 类型。
+ * true: _p->counter 的值等于 _po ，否则，返回 false 。
+ */
 #define atomic_try_cmpxchg(_p, _po, _n)		__atomic_try_cmpxchg(, _p, _po, _n)
 #define atomic_try_cmpxchg_relaxed(_p, _po, _n)	__atomic_try_cmpxchg(_relaxed, _p, _po, _n)
 #define atomic_try_cmpxchg_acquire(_p, _po, _n)	__atomic_try_cmpxchg(_acquire, _p, _po, _n)
@@ -721,6 +725,7 @@ static inline int atomic_dec_if_positive(atomic_t *v)
 #endif
 
 #define atomic_cond_read_relaxed(v, c)	smp_cond_load_relaxed(&(v)->counter, (c))
+/* 内置了自旋等待机制，一直原子地加载和判断条件是否成立 */
 #define atomic_cond_read_acquire(v, c)	smp_cond_load_acquire(&(v)->counter, (c))
 
 #ifdef CONFIG_GENERIC_ATOMIC64

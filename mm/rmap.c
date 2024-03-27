@@ -263,6 +263,7 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 	struct anon_vma_chain *avc, *pavc;
 	struct anon_vma *root = NULL;
 
+    /* 遍历父进程 VMA 中的 anon_vma_chain */
 	list_for_each_entry_reverse(pavc, &src->anon_vma_chain, same_vma) {
 		struct anon_vma *anon_vma;
 
@@ -334,6 +335,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 		return error;
 
 	/* An existing anon_vma has been reused, all done then. */
+    /* 若子进程的 VMA 已经创建了 anon_vma ，说明绑定已经完成了 */
 	if (vma->anon_vma)
 		return 0;
 
@@ -356,6 +358,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	 * process it belongs to. The root anon_vma needs to be pinned until
 	 * this anon_vma is freed, because the lock lives in the root.
 	 */
+	/* 增加 root anon_vma 中的引用计数 */
 	get_anon_vma(anon_vma->root);
 	/* Mark this anon_vma as the one where our new (COWed) pages go. */
 	vma->anon_vma = anon_vma;
@@ -771,6 +774,11 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		if (pvmw.pte) {
+            /*
+             * 判断该 pte 最近是否被访问过。如果访问过，那么 PTE_AF
+             * 位会被硬件自动置位，并清除 pte 中的 PTE_AF 位。最后会
+             * 调用 flush_tlb_page_nosync()来刷新这个页面对应的 TLB
+             */
 			if (ptep_clear_flush_young_notify(vma, address,
 						pvmw.pte)) {
 				/*
@@ -780,6 +788,10 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 				 * we will catch it; if this other mapping is
 				 * already gone, the unmap path will have set
 				 * PG_referenced or activated the page.
+				 */
+				/*
+				 * 这里排除顺序读的情况，因为顺序读的页面高速缓存
+				 * 是被回收的最佳候选者
 				 */
 				if (likely(!(vma->vm_flags & VM_SEQ_READ)))
 					referenced++;
@@ -798,6 +810,10 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 
 	if (referenced)
 		clear_page_idle(page);
+    /*
+     * 为了避免 idle feature 影响页面回收机制， page_idle_clear_pte_refs_one
+     * 里在清除了   PTE Accessed bit 后，会设置 PG_young
+     */
 	if (test_and_clear_page_young(page))
 		referenced++;
 
@@ -832,6 +848,11 @@ static bool invalid_page_referenced_vma(struct vm_area_struct *vma, void *arg)
  *
  * Quick test_and_clear_referenced for all mappings to a page,
  * returns the number of ptes which referenced the page.
+ */
+/*
+ * 用于判断页面是否被访问过，并返回引用的 pte 的个数(即访问引用这个页面的用户进程
+ * 空间虚拟页面的个数)。
+ * 核心思想是利用 RMAP 系统来统计访问、引用 pte 的用户个数。
  */
 int page_referenced(struct page *page,
 		    int is_locked,
@@ -1695,6 +1716,10 @@ static int page_mapcount_is_zero(struct page *page)
  *
  * If unmap is successful, return true. Otherwise, false.
  */
+/*
+ * 有 3 种页面需要做 unmap 操作，它们分别是 KSM 页面、匿名页面和文件映射页面。
+ * 所有映射到这个页面的用户 PTE 都已经解除完毕，返回 true ；否则返回 false 。
+ */
 bool try_to_unmap(struct page *page, enum ttu_flags flags)
 {
 	struct rmap_walk_control rwc = {
@@ -1721,6 +1746,9 @@ bool try_to_unmap(struct page *page, enum ttu_flags flags)
 	else
 		rmap_walk(page, &rwc);
 
+	/*
+	 * 若 _mapcount 为 -1 ，说明
+	 */
 	return !page_mapcount(page) ? true : false;
 }
 

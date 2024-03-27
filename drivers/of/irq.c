@@ -505,6 +505,7 @@ void __init of_irq_init(const struct of_device_id *matches)
 			goto err;
 		}
 
+		/* match->data 为 gic_of_init */
 		desc->irq_init_cb = match->data;
 		desc->dev = of_node_get(np);
 		desc->interrupt_parent = of_irq_find_parent(np);
@@ -537,6 +538,7 @@ void __init of_irq_init(const struct of_device_id *matches)
 			pr_debug("of_irq_init: init %pOF (%p), parent %p\n",
 				 desc->dev,
 				 desc->dev, desc->interrupt_parent);
+			/* 调用 gic_of_init() */
 			ret = desc->irq_init_cb(desc->dev,
 						desc->interrupt_parent);
 			if (ret) {

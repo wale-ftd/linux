@@ -17,6 +17,11 @@
  *  kernel subsystems and hints as to where to find out what things do.
  */
 
+/*
+ * 可以用下面命令触发 oom ：
+ *   echo f > /proc/sysrq-trigger
+ */
+
 #include <linux/oom.h>
 #include <linux/mm.h>
 #include <linux/err.h>
@@ -49,8 +54,32 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/oom.h>
 
+/*
+ * 是否允许在内存耗尽的时候内核 panic ，重启系统。
+ *   0 表示禁止内核恐慌；
+ *   1 表示允许内核 panic ，但是如果进程通过内存策略或 cpuset 限制了允许使用的
+ *     内存节点，这些内存节点耗尽内存，不需要重启系统，可以杀死进程，因为其他
+ *     内存节点可能有空闲的内存；
+ *   2 表示强制执行内核恐慌。
+ * 默认值是 0。如果把参数 panic_on_oom 设置成非零值，优先级比参数
+ * oom_kill_allocating_task 高。
+ *
+ * 通过 /proc/sys/vm/panic_on_oom 节点控制。
+ */
 int sysctl_panic_on_oom;
+/*
+ * 是否允许杀死正在申请分配内存并触发内存耗尽的进程，避免扫描进程链表选择进程，
+ * 非零值表示允许， 0 表示禁止，默认禁止。
+ *
+ * 通过 /proc/sys/vm/oom_kill_allocating_task 节点控制。
+ */
 int sysctl_oom_kill_allocating_task;
+/*
+ * 是否允许内存耗尽杀手杀死进程的时候打印所有用户进程的内存使用信息，非零值表
+ * 示允许， 0 表示禁止，默认允许。
+ *
+ * 通过 /proc/sys/vm/oom_dump_tasks 节点控制。
+ */
 int sysctl_oom_dump_tasks = 1;
 
 /*
@@ -1113,6 +1142,7 @@ bool out_of_memory(struct oom_control *oc)
 	constraint = constrained_alloc(oc);
 	if (constraint != CONSTRAINT_MEMORY_POLICY)
 		oc->nodemask = NULL;
+	/* 直接 panic ? */
 	check_panic_on_oom(oc, constraint);
 
 	if (!is_memcg_oom(oc) && sysctl_oom_kill_allocating_task &&
@@ -1124,6 +1154,7 @@ bool out_of_memory(struct oom_control *oc)
 		return true;
 	}
 
+	/* 选择目标 */
 	select_bad_process(oc);
 	/* Found nothing?!?! */
 	if (!oc->chosen) {
@@ -1138,6 +1169,7 @@ bool out_of_memory(struct oom_control *oc)
 			panic("System is deadlocked on memory\n");
 	}
 	if (oc->chosen && oc->chosen != (void *)-1UL)
+		/* 杀死目标 */
 		oom_kill_process(oc, !is_memcg_oom(oc) ? "Out of memory" :
 				 "Memory cgroup out of memory");
 	return !!oc->chosen;

@@ -113,7 +113,9 @@ struct bdi_writeback {
 	unsigned long last_old_flush;	/* last old data flush */
 
 	struct list_head b_dirty;	/* dirty inodes */
+	/* FIFO 队列，元素为 inode 。从 next 进， pre 出 */
 	struct list_head b_io;		/* parked for writeback */
+	/* inode 在回写中，并且处于 async 回写模式时，临时存放 inode ，见 requeue_io() */
 	struct list_head b_more_io;	/* parked for more writeback */
 	struct list_head b_dirty_time;	/* time stamps are dirty */
 	spinlock_t list_lock;		/* protects the b_* lists */

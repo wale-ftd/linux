@@ -36,8 +36,10 @@ static struct bio *get_swap_bio(gfp_t gfp_flags,
 	if (bio) {
 		struct block_device *bdev;
 
+		/* 注意，单位是页大小，不是 sector 大小 */
 		bio->bi_iter.bi_sector = map_swap_page(page, &bdev);
 		bio_set_dev(bio, bdev);
+		/* page -> sector */
 		bio->bi_iter.bi_sector <<= PAGE_SHIFT - 9;
 		bio->bi_end_io = end_io;
 
@@ -256,6 +258,7 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		end_page_writeback(page);
 		goto out;
 	}
+	/* IO 完成后，会调用 end_swap_bio_write() */
 	ret = __swap_writepage(page, wbc, end_swap_bio_write);
 out:
 	return ret;
@@ -331,6 +334,7 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 	}
 
 	ret = 0;
+	/* 设置 bio */
 	bio = get_swap_bio(GFP_NOIO, page, end_write_func);
 	if (bio == NULL) {
 		set_page_dirty(page);
@@ -341,6 +345,7 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 	bio->bi_opf = REQ_OP_WRITE | REQ_SWAP | wbc_to_write_flags(wbc);
 	bio_associate_blkg_from_page(bio, page);
 	count_swpout_vm_event(page);
+	/* 设置 PG_writeback */
 	set_page_writeback(page);
 	unlock_page(page);
 	submit_bio(bio);
@@ -399,6 +404,7 @@ int swap_readpage(struct page *page, bool synchronous)
 	 * attempt to access it in the page fault retry time check.
 	 */
 	get_task_struct(current);
+	/* 标识是当前进程发起 bio ，便于在 io 传输完(end_swap_bio_read())后里唤醒 */
 	bio->bi_private = current;
 	bio_set_op_attrs(bio, REQ_OP_READ, 0);
 	if (synchronous)

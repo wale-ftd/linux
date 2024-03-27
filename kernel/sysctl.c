@@ -262,6 +262,11 @@ extern struct ctl_table firmware_config_table[];
 #endif
 
 #ifdef HAVE_ARCH_PICK_MMAP_LAYOUT
+/*
+ * mmap 区域是否是传统布局。
+ *   0 新布局，内存映射区域自顶向下增长
+ *   1 传统布局，内存映射区域自底向上增长
+ */
 int sysctl_legacy_va_layout;
 #endif
 
@@ -1311,6 +1316,10 @@ static struct ctl_table vm_table[] = {
 		.extra1		= &zero,
 	},
 	{
+        /*
+         * 当脏页所占的百分比超过这个值时，内核回写线程(其实是 kworker)开始回写
+         * 脏页，直到脏页比例低于这个值。与 dirty_background_ratio 不能同时设置。
+         */
 		.procname	= "dirty_background_ratio",
 		.data		= &dirty_background_ratio,
 		.maxlen		= sizeof(dirty_background_ratio),
@@ -1320,6 +1329,10 @@ static struct ctl_table vm_table[] = {
 		.extra2		= &one_hundred,
 	},
 	{
+        /*
+         * 当脏页所占的内存数量超过这个值时，内核回写线程(其实是 kworker)开始回写
+         * 脏页，直到脏页数量低于这个值。与 dirty_background_bytes 不能同时设置。
+         */
 		.procname	= "dirty_background_bytes",
 		.data		= &dirty_background_bytes,
 		.maxlen		= sizeof(dirty_background_bytes),
@@ -1328,6 +1341,11 @@ static struct ctl_table vm_table[] = {
 		.extra1		= &one_ul,
 	},
 	{
+        /*
+         * 当系统的脏页百分比达到这个值时，系统调用 write 会被阻塞，并开始回写脏页，
+         * 直到脏页比例低于此值。与 dirty_bytes 不能同时设置。这是造成 I/O 延迟的重
+         * 要原因，但这是保证内存中不会存在过量脏页的保护机制。
+         */
 		.procname	= "dirty_ratio",
 		.data		= &vm_dirty_ratio,
 		.maxlen		= sizeof(vm_dirty_ratio),
@@ -1337,6 +1355,11 @@ static struct ctl_table vm_table[] = {
 		.extra2		= &one_hundred,
 	},
 	{
+        /*
+         * 当系统的脏页总数达到这个值时，系统调用 write 会被阻塞，并开始回写脏页，直
+         * 到脏页总数低于此值。注意，该值不能设置为小于两个页面大小的字节数，否则，
+         * 设置不生效并且系统会默认加载之前的旧值。与 dirty_ratio 不能同时设置。
+         */
 		.procname	= "dirty_bytes",
 		.data		= &vm_dirty_bytes,
 		.maxlen		= sizeof(vm_dirty_bytes),
@@ -1345,6 +1368,7 @@ static struct ctl_table vm_table[] = {
 		.extra1		= &dirty_bytes_min,
 	},
 	{
+        /* 内核回写线程(其实是 kworker)周期性唤醒的时间间隔。单位是百分之一秒(即 10ms) */
 		.procname	= "dirty_writeback_centisecs",
 		.data		= &dirty_writeback_interval,
 		.maxlen		= sizeof(dirty_writeback_interval),
@@ -1352,6 +1376,10 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= dirty_writeback_centisecs_handler,
 	},
 	{
+        /*
+         * 脏页的过期时间。当内核回写线程(其实是 kworker)被唤醒后会检查哪些页面的存
+         * 在时间超过了这个时间，优先将这些脏页回写到磁盘。
+         */
 		.procname	= "dirty_expire_centisecs",
 		.data		= &dirty_expire_interval,
 		.maxlen		= sizeof(dirty_expire_interval),
@@ -1425,6 +1453,13 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= lowmem_reserve_ratio_sysctl_handler,
 	},
 	{
+        /*
+         * 用来回收干净的页面高速缓存和一些可以回收的 slab 对象，如文件系统中的
+         * inode/dentries 等。其默认值的含义如下：
+         *   1: 回收和释放 page cache
+         *   2: 回收和释放可回收的 slab 对象
+         *   3: 同时回收和释放 page cache 和 slab 对象
+         */
 		.procname	= "drop_caches",
 		.data		= &sysctl_drop_caches,
 		.maxlen		= sizeof(int),

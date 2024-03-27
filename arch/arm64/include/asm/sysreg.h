@@ -627,11 +627,16 @@
 #endif
 
 /* id_aa64mmfr1 */
+/*
+ * Memory Model Feature Register 1.
+ * 用于查看芯片是否支持某些内存模型相关的特性
+ */
 #define ID_AA64MMFR1_PAN_SHIFT		20
 #define ID_AA64MMFR1_LOR_SHIFT		16
 #define ID_AA64MMFR1_HPD_SHIFT		12
 #define ID_AA64MMFR1_VHE_SHIFT		8
 #define ID_AA64MMFR1_VMIDBITS_SHIFT	4
+/* Hardware updates to Access flag and Dirty state in translation tables */
 #define ID_AA64MMFR1_HADBS_SHIFT	0
 
 #define ID_AA64MMFR1_VMIDBITS_8		0

@@ -473,6 +473,7 @@ void global_dirty_limits(unsigned long *pbackground, unsigned long *pdirty)
  * Returns the maximum number of dirty pages allowed in a node, based
  * on the node's dirtyable memory.
  */
+/* get_page_from_freelist -> node_dirty_ok -> node_dirty_limit */
 static unsigned long node_dirty_limit(struct pglist_data *pgdat)
 {
 	unsigned long node_memory = node_dirtyable_memory(pgdat);
@@ -1858,6 +1859,7 @@ DEFINE_PER_CPU(int, dirty_throttle_leaks) = 0;
  * limit we decrease the ratelimiting by a lot, to prevent individual processes
  * from overshooting the limit by (ratelimit_pages) each.
  */
+/* 平衡并回写一部分的脏页 */
 void balance_dirty_pages_ratelimited(struct address_space *mapping)
 {
 	struct inode *inode = mapping->host;
@@ -2382,8 +2384,9 @@ int write_one_page(struct page *page)
 EXPORT_SYMBOL(write_one_page);
 
 /*
- * For address_spaces which do not use buffers nor write back.
+ * For address_spaces which do not use buffers for write back.
  */
+/* 页回写有两种，一是整页，二是回写部分(需要分配 buffer_head) */
 int __set_page_dirty_no_writeback(struct page *page)
 {
 	if (!PageDirty(page))

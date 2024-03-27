@@ -19,7 +19,9 @@
 #define ARM_EXIT_KEEP(x)	x
 #define ARM_EXIT_DISCARD(x)
 
+/* 编译的格式为 aarch64 */
 OUTPUT_ARCH(aarch64)
+/* 表示其入口地址是 _text */
 ENTRY(_text)
 
 jiffies = jiffies_64;
@@ -103,6 +105,10 @@ SECTIONS
 		*(.eh_frame)
 	}
 
+    /*
+     * 代码段的起始地址(虚拟地址)。 TEXT_OFFSET := 0x00080000 在
+     * arch/arm64/Makefile 里定义
+     */
 	. = KIMAGE_VADDR + TEXT_OFFSET;
 
 	.head.text : {
@@ -141,14 +147,25 @@ SECTIONS
 
 	. = ALIGN(PAGE_SIZE);
 	idmap_pg_dir = .;
+    /*
+     * == 0x3000 ， 3 个连续 4KB 的物理页面，分别对应 PGD/PUD/PMD ，每一级
+     * 页表占据一个页面。注意，这里要建立的是 2MB 大小的块映射
+     */
 	. += IDMAP_DIR_SIZE;
 
+/* 有定义。即为 ARM 的 KPTI 功能 */
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
+	/*
+	 * 跳板页表。段为 .entry.tramp.text 的代码段会映射到这里。见
+	 * map_entry_trampoline()(arch/arm64/mm/mmu.c)
+	 */
 	tramp_pg_dir = .;
 	. += PAGE_SIZE;
 #endif
 
+/* 未定义 */
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
+    /* 为软件 PAN 功能准备的特殊页表 */
 	reserved_ttbr0 = .;
 	. += RESERVED_TTBR0_SIZE;
 #endif
@@ -230,10 +247,12 @@ SECTIONS
 	__pecoff_data_rawsize = ABSOLUTE(. - __initdata_begin);
 	_edata = .;
 
+    /* bss 段 */
 	BSS_SECTION(0, 0, 0)
 
 	. = ALIGN(PAGE_SIZE);
 	init_pg_dir = .;
+    /* == 0x5000 */
 	. += INIT_DIR_SIZE;
 	init_pg_end = .;
 

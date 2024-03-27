@@ -260,6 +260,7 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 	smp_read_barrier_depends(); /* Enforce dependency ordering from x */ \
 	__u.__val;							\
 })
+/* 强制重新从内存加载 x 的值 */
 #define READ_ONCE(x) __READ_ONCE(x, 1)
 
 /*

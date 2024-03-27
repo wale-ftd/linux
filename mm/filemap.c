@@ -824,6 +824,7 @@ static int __add_to_page_cache_locked(struct page *page,
 		old = xas_load(&xas);
 		if (old && !xa_is_value(old))
 			xas_set_err(&xas, -EEXIST);
+        /* 将 page 接入 address_space 里 */
 		xas_store(&xas, page);
 		if (xas_error(&xas))
 			goto unlock;
@@ -882,7 +883,12 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 	void *shadow = NULL;
 	int ret;
 
+    /*
+     * 先 lock ，它的调用者会将 page 里的内容读回来，然后会调用 unlock_page() 来清
+     * 除 PG_locked ，并唤醒等待这个 page 的线程
+     */
 	__SetPageLocked(page);
+    /* 加入 page cache */
 	ret = __add_to_page_cache_locked(page, mapping, offset,
 					 gfp_mask, &shadow);
 	if (unlikely(ret))
@@ -1060,9 +1066,11 @@ static void wake_up_page(struct page *page, int bit)
  * A choice of three behaviors for wait_on_page_bit_common():
  */
 enum behavior {
+	/* 唤醒后立刻拿锁 */
 	EXCLUSIVE,	/* Hold ref to page and take the bit when woken, like
 			 * __lock_page() waiting on then setting PG_locked.
 			 */
+	/* 唤醒后不拿锁 */
 	SHARED,		/* Hold ref to page and check the bit when woken, like
 			 * wait_on_page_writeback() waiting on PG_writeback.
 			 */
@@ -1118,9 +1126,11 @@ static inline int wait_on_page_bit_common(wait_queue_head_t *q,
 			io_schedule();
 
 		if (behavior == EXCLUSIVE) {
+		/* 唤醒后立刻拿锁 */
 			if (!test_and_set_bit_lock(bit_nr, &page->flags))
 				break;
 		} else if (behavior == SHARED) {
+		/* 唤醒后不拿锁 */
 			if (!test_bit(bit_nr, &page->flags))
 				break;
 		}
@@ -1319,6 +1329,7 @@ EXPORT_SYMBOL_GPL(page_endio);
  * __lock_page - get a lock on the page, assuming we need to sleep to get it
  * @__page: the page to lock
  */
+/* 等待别的进程释放 PG_locked 后立刻拿 PG_locked */
 void __lock_page(struct page *__page)
 {
 	struct page *page = compound_head(__page);
@@ -1371,6 +1382,7 @@ int __lock_page_or_retry(struct page *page, struct mm_struct *mm,
 
 			ret = __lock_page_killable(page);
 			if (ret) {
+			/* 因为信号唤醒 */
 				up_read(&mm->mmap_sem);
 				return 0;
 			}
@@ -1623,6 +1635,7 @@ no_page:
 		if (fgp_flags & FGP_ACCESSED)
 			__SetPageReferenced(page);
 
+        /* 加入 page cache 和 LRU 中 */
 		err = add_to_page_cache_lru(page, mapping, offset, gfp_mask);
 		if (unlikely(err)) {
 			put_page(page);
@@ -2085,6 +2098,7 @@ find_page:
 				goto no_cached_page;
 		}
 		if (PageReadahead(page)) {
+		/* 上一次预读的页，现在被真正读了，会进行更激进的异步预读 */
 			page_cache_async_readahead(mapping,
 					ra, filp, page,
 					index, last_index - index);
@@ -2769,6 +2783,7 @@ repeat:
 		page = __page_cache_alloc(gfp);
 		if (!page)
 			return ERR_PTR(-ENOMEM);
+        /* 会设置 PageLocked */
 		err = add_to_page_cache_lru(page, mapping, index, gfp);
 		if (unlikely(err)) {
 			put_page(page);
@@ -2785,6 +2800,7 @@ filler:
 			return ERR_PTR(err);
 		}
 
+        /* 等待 page 填充完。当 filler 填充完 page 后会唤醒等待这个 page 的线程 */
 		page = wait_on_page_read(page);
 		if (IS_ERR(page))
 			return page;
@@ -3213,6 +3229,7 @@ again:
 		if (mapping_writably_mapped(mapping))
 			flush_dcache_page(page);
 
+		/* 从用户空间拷贝数据 */
 		copied = iov_iter_copy_from_user_atomic(page, i, offset, bytes);
 		flush_dcache_page(page);
 

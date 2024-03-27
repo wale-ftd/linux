@@ -279,6 +279,10 @@ static void end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	clear_buffer_async_read(bh);
 	unlock_buffer(bh);
 	tmp = bh;
+	/*
+	 * 检查页的所有其他 buffer 上的读操作是否也已经结束。如果都结束，唤醒与
+	 * 该页相关的队列上睡眠、等待此事件的所有进程
+	 */
 	do {
 		if (!buffer_uptodate(tmp))
 			page_uptodate = 0;
@@ -336,6 +340,10 @@ void end_buffer_async_write(struct buffer_head *bh, int uptodate)
 	clear_buffer_async_write(bh);
 	unlock_buffer(bh);
 	tmp = bh->b_this_page;
+	/*
+	 * 检查页的所有其他 buffer 上的写操作是否也已经结束。如果都结束，唤醒与
+	 * 该页相关的队列上睡眠、等待此事件的所有进程
+	 */
 	while (tmp != bh) {
 		if (buffer_async_write(tmp)) {
 			BUG_ON(!buffer_locked(tmp));
@@ -2216,6 +2224,10 @@ EXPORT_SYMBOL(block_is_partially_uptodate);
  * set/clear_buffer_uptodate() functions propagate buffer state into the
  * page struct once IO has completed.
  */
+/*
+ * 从块设备读取整页，但只会读取页中不是最新的 buffer_head 。如果能确定整页
+ * 都不是最新的，最好调用 mpage_readpage()，避免多余开销
+ */
 int block_read_full_page(struct page *page, get_block_t *get_block)
 {
 	struct inode *inode = page->mapping->host;
@@ -2235,10 +2247,13 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	nr = 0;
 	i = 0;
 
+	/* 弄清楚哪些缓冲区的数据是最新的(BH_Uptodate)，哪些是无效的(BH_Mapped) */
 	do {
 		if (buffer_uptodate(bh))
+		/* buffer 中的数据是最新的了，无需读取 */
 			continue;
 
+		/* 是否设置 BH_Mapped() */
 		if (!buffer_mapped(bh)) {
 			int err = 0;
 
@@ -2262,6 +2277,7 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 			if (buffer_uptodate(bh))
 				continue;
 		}
+		/* 缓冲区已经与块建立映射，但其内容不是最新的，则放入临时数组 */
 		arr[nr++] = bh;
 	} while (i++, iblock++, (bh = bh->b_this_page) != head);
 
@@ -2282,7 +2298,9 @@ int block_read_full_page(struct page *page, get_block_t *get_block)
 	/* Stage two: lock the buffers */
 	for (i = 0; i < nr; i++) {
 		bh = arr[i];
+		/* 锁定所有需要读取的 buffer ，防止多线程同时操作同一 buffer */
 		lock_buffer(bh);
+		/* 设置 bh end io */
 		mark_buffer_async_read(bh);
 	}
 

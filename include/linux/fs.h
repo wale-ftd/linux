@@ -339,8 +339,10 @@ typedef struct {
 typedef int (*read_actor_t)(read_descriptor_t *, struct page *,
 		unsigned long, unsigned long);
 
+/* 如 swap_aops/shmem_aops/zsmalloc_aops/ext4_aops */
 struct address_space_operations {
 	int (*writepage)(struct page *page, struct writeback_control *wbc);
+	/* mpage_readpage() */
 	int (*readpage)(struct file *, struct page *);
 
 	/* Write back some dirty pages from this mapping. */
@@ -353,12 +355,15 @@ struct address_space_operations {
 	 * Reads in the requested pages. Unlike ->readpage(), this is
 	 * PURELY used for read-ahead!.
 	 */
+	/* 如 mpage_readpages(), ext4_mpage_readpages() */
 	int (*readpages)(struct file *filp, struct address_space *mapping,
 			struct list_head *pages, unsigned nr_pages);
 
+	/* 如 shmem_write_begin() */
 	int (*write_begin)(struct file *, struct address_space *mapping,
 				loff_t pos, unsigned len, unsigned flags,
 				struct page **pagep, void **fsdata);
+	/* 如 shmem_write_end() */
 	int (*write_end)(struct file *, struct address_space *mapping,
 				loff_t pos, unsigned len, unsigned copied,
 				struct page *page, void *fsdata);
@@ -373,9 +378,19 @@ struct address_space_operations {
 	 * migrate the contents of a page to the specified target. If
 	 * migrate_mode is MIGRATE_ASYNC, it must not block.
 	 */
+	/*
+	 * 若一个驱动想支持页面迁移，那么它必须支持下面 3 个方法，如 zsmalloc_aops 。
+	 * 先 isolate_page ，再 migratepage 。如果迁移失败，需要调用 putback_page 把
+	 * 页面迁移回原来的地方。
+	 *
+	 * 迁移旧页面的内容到新页面中，并且设置 page 对应的成员和属性。如 调用
+	 * __ClearPageMovable()清除 PAGE_MAPPING_MOVABLE 标志
+	 */
 	int (*migratepage) (struct address_space *,
 			struct page *, struct page *, enum migrate_mode);
+    /* 被 isolate_movable_page()调用 */
 	bool (*isolate_page)(struct page *, isolate_mode_t);
+	/* 页面迁移失败时，把页面迁移回原来的地方 */
 	void (*putback_page)(struct page *);
 	int (*launder_page) (struct page *);
 	int (*is_partially_uptodate) (struct page *, unsigned long,
@@ -423,14 +438,17 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
  */
 struct address_space {
 	struct inode		*host;
+    /* radix tree 的升级版 */
 	struct xarray		i_pages;
 	gfp_t			gfp_mask;
 	atomic_t		i_mmap_writable;
+    /* 存放所有映射该 address_space 的 vma 的红黑树 */
 	struct rb_root_cached	i_mmap;
 	struct rw_semaphore	i_mmap_rwsem;
 	unsigned long		nrpages;
 	unsigned long		nrexceptional;
 	pgoff_t			writeback_index;
+	/* 如 swap_aops */
 	const struct address_space_operations *a_ops;
 	unsigned long		flags;
 	errseq_t		wb_err;
@@ -1382,6 +1400,7 @@ struct sb_writers {
 };
 
 struct super_block {
+	/* 链入 super_blocks 全局链表 */
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
 	unsigned char		s_blocksize_bits;
@@ -1780,11 +1799,13 @@ struct block_device_operations;
 
 struct iov_iter;
 
+/* 如  shmem_file_operations */
 struct file_operations {
 	struct module *owner;
 	loff_t (*llseek) (struct file *, loff_t, int);
 	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
 	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+	/* 如 ext4_file_read_iter() */
 	ssize_t (*read_iter) (struct kiocb *, struct iov_iter *);
 	ssize_t (*write_iter) (struct kiocb *, struct iov_iter *);
 	int (*iterate) (struct file *, struct dir_context *);
@@ -1792,6 +1813,7 @@ struct file_operations {
 	__poll_t (*poll) (struct file *, struct poll_table_struct *);
 	long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
 	long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
+	/* 如 generic_file_mmap, ext4_file_mmap */
 	int (*mmap) (struct file *, struct vm_area_struct *);
 	unsigned long mmap_supported_flags;
 	int (*open) (struct inode *, struct file *);
@@ -1801,6 +1823,7 @@ struct file_operations {
 	int (*fasync) (int, struct file *, int);
 	int (*lock) (struct file *, int, struct file_lock *);
 	ssize_t (*sendpage) (struct file *, struct page *, int, size_t, loff_t *, int);
+	/* 如 thp_get_unmapped_area, shmem_get_unmapped_area, hugetlb_get_unmapped_area */
 	unsigned long (*get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
 	int (*check_flags)(int);
 	int (*flock) (struct file *, int, struct file_lock *);
@@ -2103,6 +2126,7 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 #define I_FREEING		(1 << 5)
 #define I_CLEAR			(1 << 6)
 #define __I_SYNC		7
+/* inode 在回写中 */
 #define I_SYNC			(1 << __I_SYNC)
 #define I_REFERENCED		(1 << 8)
 #define __I_DIO_WAKEUP		9

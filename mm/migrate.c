@@ -81,6 +81,10 @@ int migrate_prep_local(void)
 	return 0;
 }
 
+/*
+ * 隔离不在 LRU 链表上的可移动页(包括 KVM 虚拟机的内存气球(memory
+ * balloon)里面的页和压缩页内存分配器 zsmalloc 使用的页)
+ */
 int isolate_movable_page(struct page *page, isolate_mode_t mode)
 {
 	struct address_space *mapping;
@@ -124,11 +128,16 @@ int isolate_movable_page(struct page *page, isolate_mode_t mode)
 	mapping = page_mapping(page);
 	VM_BUG_ON_PAGE(!mapping, page);
 
+    /* 调用驱动程序提供的方法分离页面 */
 	if (!mapping->a_ops->isolate_page(page, mode))
 		goto out_no_isolated;
 
 	/* Driver shouldn't use PG_isolated bit of page->flags */
 	WARN_ON_ONCE(PageIsolated(page));
+    /*
+     * 当分离成功之后，页面会被标记为 PG_isolated ，这样其它 CPU 在分离页面时就会
+     * 忽略这个页面。
+     */
 	__SetPageIsolated(page);
 	unlock_page(page);
 
@@ -214,6 +223,7 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 	swp_entry_t entry;
 
 	VM_BUG_ON_PAGE(PageTail(page), page);
+    /* 遍历页表，通过虚拟地址找到对应的 PTE */
 	while (page_vma_mapped_walk(&pvmw)) {
 		if (PageKsm(page))
 			new = page;
@@ -231,6 +241,7 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 #endif
 
 		get_page(new);
+        /* 根据新页面和 vma 属性来生成一个 PTE */
 		pte = pte_mkold(mk_pte(new, READ_ONCE(vma->vm_page_prot)));
 		if (pte_swp_soft_dirty(*pvmw.pte))
 			pte = pte_mksoft_dirty(pte);
@@ -265,8 +276,13 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 		} else
 #endif
 		{
+            /*
+             * 把新生成的 PTE 的内容写回到原来映射的页表(pvmw.pte)中，完成 PTE 的
+             * 迁移，这样用户进程地址空间就可以通过原来的 PTE 访问新页面
+             */
 			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 
+            /* 把新页面添加到 RMAP 系统中 */
 			if (PageAnon(new))
 				page_add_anon_rmap(new, vma, pvmw.address, false);
 			else
@@ -279,6 +295,7 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 			clear_page_mlock(page);
 
 		/* No need to invalidate - it was non-present before */
+        /* 更新相应的高速缓存 */
 		update_mmu_cache(vma, pvmw.address, pvmw.pte);
 	}
 
@@ -662,8 +679,10 @@ void migrate_page_copy(struct page *newpage, struct page *page)
 	if (PageHuge(page) || PageTransHuge(page))
 		copy_huge_page(newpage, page);
 	else
+    /* 复制旧页面的内容到新页面 */
 		copy_highpage(newpage, page);
 
+    /* 把旧页面的 flags 成员复制到新页面 */
 	migrate_page_states(newpage, page);
 }
 EXPORT_SYMBOL(migrate_page_copy);
@@ -678,6 +697,7 @@ EXPORT_SYMBOL(migrate_page_copy);
  *
  * Pages are locked upon entry and exit.
  */
+/* 迁移的核心函数 */
 int migrate_page(struct address_space *mapping,
 		struct page *newpage, struct page *page,
 		enum migrate_mode mode)
@@ -941,6 +961,7 @@ static int move_to_new_page(struct page *newpage, struct page *page,
 
 	if (likely(is_lru)) {
 		if (!mapping)
+        /* 该页面是没有分配交换缓存的匿名页面 */
 			rc = migrate_page(mapping, newpage, page, mode);
 		else if (mapping->a_ops->migratepage)
 			/*
@@ -1006,10 +1027,16 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	int rc = -EAGAIN;
 	int page_was_mapped = 0;
 	struct anon_vma *anon_vma = NULL;
+    /* 判断是否属于标准 LRU 页面 */
 	bool is_lru = !__PageMovable(page);
 
+	/*
+	 * 尝试锁住旧的物理页。如果其他进程持有锁，那么异步模式的内存碎片整
+	 * 理直接返回，轻量级同步模式或完全同步模式的内存碎片整理等待锁。
+	 */
 	if (!trylock_page(page)) {
 		if (!force || mode == MIGRATE_ASYNC)
+            /* 没有必要等待页面锁被释放 */
 			goto out;
 
 		/*
@@ -1025,12 +1052,33 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 		 * avoid the use of lock_page for direct compaction
 		 * altogether.
 		 */
+		/*
+		 * 如果当前进程设置了 PF_MEMALLOC 标志位，表示当前进程可能处于
+		 * direct compaction 的内核路径上，通过睡眠等待页锁是不安全的，
+		 * 所以直接忽略该页面。例如，在文件预读中，预读的所有页面都会
+		 * 加锁并被添加到 LRU 链表中，等到预读完成后，这些页面会标记
+		 * PG_uptodate 并释放锁，这个过程中块设备层会把多个页面合并到
+		 * 一个 BIO 设备中(见 mpage_readpages())。如果在分配第2个或者
+		 * 第3个页面时发生内存短缺，内核会运行到 direct compaction 的
+		 * 内核路径上，导致一个页面加锁之后又等待这个锁，产生死锁，因此
+		 * direct compaction 的内核路径会标记 PF_MEMALLOC 。 PF_MEMALLOC
+		 * 标志位一般在 direct compaction 、 直接内存以及 kswapd 中设置，
+		 * 这些场景下可能会有少量的内存分配行为，因此若设置 PF_MEMALLOC
+		 * 标志位，表示允许他们使用系统预留的内存，即不用考虑 zone 水位问
+		 * 题，可以参见 __perform_reclaim()/__alloc_pages_direct_compact()
+		 * 和 kswapd()等函数
+		 */
 		if (current->flags & PF_MEMALLOC)
 			goto out;
 
+        /* 等待页面锁被释放 */
 		lock_page(page);
 	}
 
+	/*
+	 * 如果页正在回写到存储设备，那么异步模式或轻量级同步模式的内存碎片
+	 * 整理直接返回， 完全同步模式的内存碎片整理等待页回写完成。
+	 */
 	if (PageWriteback(page)) {
 		/*
 		 * Only in the case of a full synchronous migration is it
@@ -1076,13 +1124,17 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	 * cases where there might be a race with the previous use of newpage.
 	 * This is much like races on refcount of oldpage: just don't BUG().
 	 */
+	/* 尝试锁住新的物理页，如果页被其他进程锁住，不等待锁，直接返回 */
 	if (unlikely(!trylock_page(newpage)))
 		goto out_unlock;
 
+    /* 处理非 LRU 页面 */
 	if (unlikely(!is_lru)) {
 		rc = move_to_new_page(newpage, page, mode);
 		goto out_unlock_both;
 	}
+
+    /* 处理 LRU 页面 */
 
 	/*
 	 * Corner case handling:
@@ -1098,23 +1150,47 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 	 */
 	if (!page->mapping) {
 		VM_BUG_ON_PAGE(PageAnon(page), page);
+		/*
+		 * 处理页还没有建立反向映射这种边界情况，第一种情况是页错误异常处理程
+		 * 序刚刚把页从交换区读到交换缓存，把页添加到 LRU 链表，但是还没有设置
+		 * 页表把虚拟页映射到物理页和创建反向映射(具体代码见函数 do_swap_page()
+		 * )；第二种情况是截断文件，被截断的文件页的反向映射被删除(具体代码见
+		 * truncate_cleanup_page())，那么处理如下：如果页是块设备的块缓冲区(
+		 * 块设备的块缓冲区基于文件的页缓存实现)， 那么调用函数
+		 * try_to_free_buffers()释放块缓冲区；否则，调用函数
+		 * migrate_folio_move()把页移动到新的物理页。
+		 */
 		if (page_has_private(page)) {
 			try_to_free_buffers(page);
 			goto out_unlock_both;
 		}
 	} else if (page_mapped(page)) {
+	/* 有用户 PTE 映射该页面 */
+	/*
+	 * 如果页有反向映射，并且存在页表项映射到这个页，调用函数
+	 * try_to_migrate()从进程的页表中删除虚拟页到旧的物理页的映射，把页表
+	 * 项设置为特殊的迁移页表项(迁移页表项的格式见
+	 * make_writable_migration_entry()。在迁移期间，如果其他处理器访问这一
+	 * 页，会触发 page fault ，在 do_swap_page()中如果发现页表项是迁移页表
+	 * 项，那么睡眠等待页迁移完成)，然后调用函数 migrate_folio_move() 把页
+	 * 移动到新的物理页，最后调用 remove_migration_ptes() 在进程的页表中删
+	 * 除迁移页表项，把虚拟页映射到新的物理页。
+	 */
 		/* Establish migration ptes */
 		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
 				page);
+        /* 对于有用户态进程地址空间映射的页面，需要解除页面所有映射的用户 pte */
 		try_to_unmap(page,
 			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
 		page_was_mapped = 1;
 	}
 
 	if (!page_mapped(page))
+    /* 没有用户 PTE 映射该页面 */
 		rc = move_to_new_page(newpage, page, mode);
 
 	if (page_was_mapped)
+        /* 对于迁移成功的页面要迁移页表。对于迁移页面失败的情况，删除迁移的 PTE */
 		remove_migration_ptes(page,
 			rc == MIGRATEPAGE_SUCCESS ? newpage : page, false);
 
@@ -1136,6 +1212,10 @@ out:
 	 * state.
 	 */
 	if (rc == MIGRATEPAGE_SUCCESS) {
+	/*
+	 * 如果迁移成功，那么对于非 LRU 可移动页，把新的物理页的引用计数减 1 ；对于
+	 * LRU 可移动页，把新的物理页插入 LRU 链表。
+	 */
 		if (unlikely(!is_lru))
 			put_page(newpage);
 		else
@@ -1170,6 +1250,7 @@ static ICE_noinline int unmap_and_move(new_page_t get_new_page,
 	struct page *newpage;
 
 	if (!thp_migration_supported() && PageTransHuge(page))
+	/* 高版本的内核会处理这种情况：将透明巨型页分裂成普通页 */
 		return -ENOMEM;
 
 	newpage = get_new_page(page, private);
@@ -1186,6 +1267,7 @@ static ICE_noinline int unmap_and_move(new_page_t get_new_page,
 				__ClearPageIsolated(page);
 			unlock_page(page);
 		}
+        /* 把空闲页面添加到 cc->freepages 链表中 */
 		if (put_new_page)
 			put_new_page(newpage, private);
 		else
@@ -1234,6 +1316,7 @@ out:
 				num_poisoned_pages_inc();
 		}
 	} else {
+    /* 处理迁移没成功的情况 */
 		if (rc != -EAGAIN) {
 			if (likely(!__PageMovable(page))) {
 				putback_lru_page(page);
@@ -1242,6 +1325,7 @@ out:
 
 			lock_page(page);
 			if (PageMovable(page))
+                /* 把页面重新添加到可移动的页面里 */
 				putback_movable_page(page);
 			else
 				__ClearPageIsolated(page);
@@ -1249,6 +1333,7 @@ out:
 			put_page(page);
 		}
 put_new:
+        /* 释放刚才新分配的页面 */
 		if (put_new_page)
 			put_new_page(newpage, private);
 		else
@@ -1395,6 +1480,16 @@ out:
  *
  * Returns the number of pages that were not migrated, or an error code.
  */
+/*
+ * 迁移的主函数。页面迁移的本质是将页面的内容迁移到新的页面。其中会涉及分配新页面，
+ * 将旧页面的内容复制到新页面，断开旧页面的映射关系，并把映射关系映射到新页面，最后
+ * 释放旧页面。
+ *
+ * 内核中多处使用页面迁移的功能，如：
+ *   1. 内存规整
+ *   2. 内存热插拔
+ *   3. NUMA 系统，系统有一个 migrate_pages 系统调用(会调用kernel_migrate_pages())
+ */
 int migrate_pages(struct list_head *from, new_page_t get_new_page,
 		free_page_t put_new_page, unsigned long private,
 		enum migrate_mode mode, int reason)
@@ -1414,6 +1509,7 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	for(pass = 0; pass < 10 && retry; pass++) {
 		retry = 0;
 
+        /* 从 from 链表中获取待迁移页面 */
 		list_for_each_entry_safe(page, page2, from, lru) {
 retry:
 			cond_resched();

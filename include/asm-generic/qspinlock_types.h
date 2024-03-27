@@ -39,11 +39,19 @@ typedef struct qspinlock {
 		 */
 #ifdef __LITTLE_ENDIAN
 		struct {
+			/* 成功持有了锁 */
 			u8	locked;
+			/* bit[0]表示第一顺位继承者，自旋等待锁释放， bit[7:1] 未使用 */
 			u8	pending;
 		};
 		struct {
 			u16	locked_pending;
+			/*
+			 * bit[1:0] idx 域，用来获取 qnodes ，目前支持 4 种上下文(进程
+			 * 上下文、软中断上下文、硬中断上下文和不可屏蔽中断上下文)的
+			 * qnode
+			 * bit[15:2] cpu 域，用来标识等待队列末尾的 CPU
+			 */
 			u16	tail;
 		};
 #else
@@ -85,6 +93,7 @@ typedef struct qspinlock {
 				      << _Q_ ## type ## _OFFSET)
 #define _Q_LOCKED_OFFSET	0
 #define _Q_LOCKED_BITS		8
+/* == 0xff */
 #define _Q_LOCKED_MASK		_Q_SET_MASK(LOCKED)
 
 #define _Q_PENDING_OFFSET	(_Q_LOCKED_OFFSET + _Q_LOCKED_BITS)
@@ -93,6 +102,7 @@ typedef struct qspinlock {
 #else
 #define _Q_PENDING_BITS		1
 #endif
+/* == 0xff00 */
 #define _Q_PENDING_MASK		_Q_SET_MASK(PENDING)
 
 #define _Q_TAIL_IDX_OFFSET	(_Q_PENDING_OFFSET + _Q_PENDING_BITS)
@@ -106,7 +116,9 @@ typedef struct qspinlock {
 #define _Q_TAIL_OFFSET		_Q_TAIL_IDX_OFFSET
 #define _Q_TAIL_MASK		(_Q_TAIL_IDX_MASK | _Q_TAIL_CPU_MASK)
 
+/* 1 << 0 */
 #define _Q_LOCKED_VAL		(1U << _Q_LOCKED_OFFSET)
+/* 1 << 8 */
 #define _Q_PENDING_VAL		(1U << _Q_PENDING_OFFSET)
 
 #endif /* __ASM_GENERIC_QSPINLOCK_TYPES_H */

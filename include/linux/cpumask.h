@@ -90,9 +90,20 @@ extern struct cpumask __cpu_possible_mask;
 extern struct cpumask __cpu_online_mask;
 extern struct cpumask __cpu_present_mask;
 extern struct cpumask __cpu_active_mask;
+/* 设置顺序是：possible -> present -> online -> active */
+/*
+ * 表示系统中可以运行(正在运行或者将来某个时间点运行)的 CPU 。在
+ * smp_init_cpus()里设置
+ */
 #define cpu_possible_mask ((const struct cpumask *)&__cpu_possible_mask)
+/* 表示系统中正在运行的 CPU 。在 smp_init()->cpu_up()里设置 */
 #define cpu_online_mask   ((const struct cpumask *)&__cpu_online_mask)
+/*
+ * 表示系统中可处于运行的 CPU ，它们不一定都处于运行状态，有的 CPU 可能被热
+ * 拔插了。在 smp_prepare_cpus()里设置
+ */
 #define cpu_present_mask  ((const struct cpumask *)&__cpu_present_mask)
+/* 表示系统中活跃的 CPU 。在 smp_init()->cpu_up()里设置 */
 #define cpu_active_mask   ((const struct cpumask *)&__cpu_active_mask)
 
 #if NR_CPUS > 1
@@ -699,6 +710,7 @@ static inline unsigned int cpumask_size(void)
  * Please also note that __cpumask_var_read_mostly can be used to declare
  * a cpumask_var_t variable itself (not its content) as read mostly.
  */
+/* 未定义 */
 #ifdef CONFIG_CPUMASK_OFFSTACK
 typedef struct cpumask *cpumask_var_t;
 
@@ -724,6 +736,7 @@ typedef struct cpumask cpumask_var_t[1];
 #define this_cpu_cpumask_var_ptr(x) this_cpu_ptr(x)
 #define __cpumask_var_read_mostly
 
+/* 是这个 */
 static inline bool alloc_cpumask_var(cpumask_var_t *mask, gfp_t flags)
 {
 	return true;

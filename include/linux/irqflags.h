@@ -105,6 +105,7 @@ do {						\
  * The local_irq_*() APIs are equal to the raw_local_irq*()
  * if !TRACE_IRQFLAGS.
  */
+/* 未定义 */
 #ifdef CONFIG_TRACE_IRQFLAGS
 #define local_irq_enable() \
 	do { trace_hardirqs_on(); raw_local_irq_enable(); } while (0)
@@ -137,6 +138,11 @@ do {						\
 
 #else /* !CONFIG_TRACE_IRQFLAGS */
 
+/*
+ * 关中断互斥有两层含义：
+ *   1. 防止中断处理的竞争；
+ *   2. 防止中断后触发进程切换的竞争
+ */
 #define local_irq_enable()	do { raw_local_irq_enable(); } while (0)
 #define local_irq_disable()	do { raw_local_irq_disable(); } while (0)
 #define local_irq_save(flags)					\
@@ -155,7 +161,9 @@ do {						\
  * definition would be fine we need to use different ones for the time being
  * to avoid build issues.
  */
+/* 有定义 */
 #ifdef CONFIG_TRACE_IRQFLAGS_SUPPORT
+/* 读系统寄存器，查看本地中断是否关闭 */
 #define irqs_disabled()					\
 	({						\
 		unsigned long _flags;			\

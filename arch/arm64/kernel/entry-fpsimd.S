@@ -28,6 +28,7 @@
  * x0 - pointer to struct fpsimd_state
  */
 ENTRY(fpsimd_save_state)
+	/* 是一个宏，定义在 arch/arm64/include/asm/fpsimdmacros.h */
 	fpsimd_save x0, 8
 	ret
 ENDPROC(fpsimd_save_state)

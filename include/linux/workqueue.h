@@ -28,6 +28,14 @@ void delayed_work_timer_fn(struct timer_list *t);
 #define work_data_bits(work) ((unsigned long *)(&(work)->data))
 
 enum {
+    /*
+     * 用于同步 work 加入和删除队列操作。
+     * 设置 PENDING 位：添加 work 到 wq 中(schedule_work -> queue_work ->
+     *                  queue_work_on -> __queue_work -> insert_work ->
+     *                  set_work_pwq)
+     * 清除 PENDING 位：work 在 worker 里，并且马上要执行(worker_thread ->
+     *                  process_one_work -> set_work_pool_and_clear_pending)
+     */
 	WORK_STRUCT_PENDING_BIT	= 0,	/* work item is pending execution */
 	WORK_STRUCT_DELAYED_BIT	= 1,	/* work item is delayed */
 	WORK_STRUCT_PWQ_BIT	= 2,	/* data points to pwq */
@@ -42,8 +50,10 @@ enum {
 	WORK_STRUCT_COLOR_BITS	= 4,
 
 	WORK_STRUCT_PENDING	= 1 << WORK_STRUCT_PENDING_BIT,
+	/* 表示该 work 被延迟执行，如 pwq 活跃 work 数量大小其最大值 */
 	WORK_STRUCT_DELAYED	= 1 << WORK_STRUCT_DELAYED_BIT,
 	WORK_STRUCT_PWQ		= 1 << WORK_STRUCT_PWQ_BIT,
+	/* 表示下一个 work 连接到该 work 上 */
 	WORK_STRUCT_LINKED	= 1 << WORK_STRUCT_LINKED_BIT,
 #ifdef CONFIG_DEBUG_OBJECTS_WORK
 	WORK_STRUCT_STATIC	= 1 << WORK_STRUCT_STATIC_BIT,
@@ -100,6 +110,12 @@ enum {
 };
 
 struct work_struct {
+    /*
+     * data 成员包括两部分：低位部分是 work 的标志位，剩余的位通常用于存放上
+     * 一次运行的 worker_pool 的 ID 或 pool_workqueue 的指针，存放的哪个由
+     * WORK_STRUCT_PWQ 标志位来决定。
+     * 详见 get_work_pool_id()/set_work_pwq()/get_work_pwq()
+     */
 	atomic_long_t data;
 	struct list_head entry;
 	work_func_t func;
@@ -306,10 +322,21 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
  * Documentation/core-api/workqueue.rst.
  */
 enum {
+    /*
+     * unbound 类型的 work 不需要额外的同步管理， unbound 工作线程池会尝试尽快
+     * 执行它的 work 。这类 work 会牺牲一部分性能(局部原理带来的性能提升)，比较
+     * 适用于如下场景：
+     *   1. 一些应用会在不同的 CPU 上跳跃，这样如果创建 bound 类型的工作队列，
+     *      会创建很多没用的工作线程
+     *   2. 长时间运行的 CPU 消耗类型的应用(标记 WQ_CPU_INTENSIVE 标志位)通常会
+     *      创建 unbound 类型的工作队列，进程调度器会管理这类工作线程在哪个 CPU
+     *      上运行
+     */
 	WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
 	WQ_FREEZABLE		= 1 << 2, /* freeze during suspend */
 	WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */
 	WQ_HIGHPRI		= 1 << 4, /* high priority */
+	/* 排在这类 work 后面的 non-CPU-intensive 类型的 work 可能会推迟执行 */
 	WQ_CPU_INTENSIVE	= 1 << 5, /* cpu intensive workqueue */
 	WQ_SYSFS		= 1 << 6, /* visible in sysfs, see wq_sysfs_register() */
 
@@ -340,7 +367,9 @@ enum {
 	 */
 	WQ_POWER_EFFICIENT	= 1 << 7,
 
+    /* 表示 wq 正在销毁中 */
 	__WQ_DRAINING		= 1 << 16, /* internal: workqueue is draining */
+	/* 表示同一时间只能执行一个 work */
 	__WQ_ORDERED		= 1 << 17, /* internal: workqueue is ordered */
 	__WQ_LEGACY		= 1 << 18, /* internal: create*_workqueue() */
 	__WQ_ORDERED_EXPLICIT	= 1 << 19, /* internal: alloc_ordered_workqueue() */

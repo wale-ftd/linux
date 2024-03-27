@@ -27,9 +27,12 @@
 
 #include "slab.h"
 
+/* 当 slab 机制完全初始化完成后状态变成 FULL */
 enum slab_state slab_state;
+/* struct kmem_cache 的链表头 */
 LIST_HEAD(slab_caches);
 DEFINE_MUTEX(slab_mutex);
+/* 在具体的机制(如 slub.c)里赋值 */
 struct kmem_cache *kmem_cache;
 
 #ifdef CONFIG_HARDENED_USERCOPY
@@ -57,6 +60,11 @@ static DECLARE_WORK(slab_caches_to_rcu_destroy_work,
 
 /*
  * Merge control. If this is set then no merging of slab caches will occur.
+ */
+/*
+ * 为了减少内存开销和增加对象的缓存热度， slab 分配器会合并相似的内存缓存。在创
+ * 建内存缓存的时候，从已经存在的内存缓存中找到一个相似的内存缓存，和原始的创建
+ * 者共享这个内存缓存。
  */
 static bool slab_nomerge = !IS_ENABLED(CONFIG_SLAB_MERGE_DEFAULT);
 
@@ -345,12 +353,14 @@ struct kmem_cache *find_mergeable(unsigned int size, unsigned int align,
 		 * Check if alignment is compatible.
 		 * Courtesy of Adrian Drzewiecki
 		 */
+		/* s 的对象长度不是 正在创建的内存缓存 的对齐值的整数倍，不能和 s 合并 */
 		if ((s->size & ~(align - 1)) != s->size)
 			continue;
 
 		if (s->size - size >= sizeof(void *))
 			continue;
 
+		/* s->align % align 理解为 s->align 不是 align 的整数倍 */
 		if (IS_ENABLED(CONFIG_SLAB) && align &&
 			(align > s->align || s->align % align))
 			continue;
@@ -388,11 +398,13 @@ static struct kmem_cache *create_cache(const char *name,
 	if (err)
 		goto out_free_cache;
 
+    /* 在具体机制文件里实现 */
 	err = __kmem_cache_create(s, flags);
 	if (err)
 		goto out_free_cache;
 
 	s->refcount = 1;
+	/* 添加到全局 slab_caches 链表 */
 	list_add(&s->list, &slab_caches);
 	memcg_link_cache(s);
 out:
@@ -476,6 +488,10 @@ kmem_cache_create_usercopy(const char *name,
 		usersize = useroffset = 0;
 
 	if (!usersize)
+        /*
+         * 可能会找到一个现有的、合适的 slab 描述符进行复用。可以在传递给
+         * 内核的参数中添加"slab_nomerge/slub_nomerge"来关闭该功能。
+         */
 		s = __kmem_cache_alias(name, size, align, flags, ctor);
 	if (s)
 		goto out_unlock;

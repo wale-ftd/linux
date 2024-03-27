@@ -622,6 +622,11 @@ int
 dma_common_get_sgtable(struct device *dev, struct sg_table *sgt, void *cpu_addr,
 		dma_addr_t dma_addr, size_t size, unsigned long attrs);
 
+/*
+ * 一致性 DMA buffer 分配函数。 size 是页的整数倍。
+ *
+ * 如果想分配小于一页的 DMA buffer ，可以使用内核提供的 DMA pool 机制(mm/dmapool.c)。
+ */
 static inline void *dma_alloc_coherent(struct device *dev, size_t size,
 		dma_addr_t *dma_handle, gfp_t gfp)
 {

@@ -38,6 +38,7 @@
  * VMEMMAP_SIZE - allows the whole linear region to be covered by
  *                a struct page array
  */
+/* 1 << 35+6 = 2048GB */
 #define VMEMMAP_SIZE (UL(1) << (VA_BITS - PAGE_SHIFT - 1 + STRUCT_PAGE_MAX_SHIFT))
 
 /*
@@ -47,21 +48,30 @@
  * VA_BITS - the maximum number of bits for virtual addresses.
  * VA_START - the first kernel virtual address.
  */
+/* == 48 */
 #define VA_BITS			(CONFIG_ARM64_VA_BITS)
+/* == 0xffff000000000000 */
 #define VA_START		(UL(0xffffffffffffffff) - \
 	(UL(1) << VA_BITS) + 1)
+/*
+ * 表示物理内存在内核空间里做线性映射的起始地址，其值为 0xffff800000000000 。
+ * Linux 在初始化时会把物理内存全部做一次线性映射。
+ */
 #define PAGE_OFFSET		(UL(0xffffffffffffffff) - \
 	(UL(1) << (VA_BITS - 1)) + 1)
+/* 表示内核映像文件映射到内核空间的起始虚拟地址，其值为 0xffff000010000000 */
 #define KIMAGE_VADDR		(MODULES_END)
 #define BPF_JIT_REGION_START	(VA_START + KASAN_SHADOW_SIZE)
 #define BPF_JIT_REGION_SIZE	(SZ_128M)
 #define BPF_JIT_REGION_END	(BPF_JIT_REGION_START + BPF_JIT_REGION_SIZE)
+/* == 0xffff000010000000 */
 #define MODULES_END		(MODULES_VADDR + MODULES_VSIZE)
 #define MODULES_VADDR		(BPF_JIT_REGION_END)
 #define MODULES_VSIZE		(SZ_128M)
 #define VMEMMAP_START		(PAGE_OFFSET - VMEMMAP_SIZE)
 #define PCI_IO_END		(VMEMMAP_START - SZ_2M)
 #define PCI_IO_START		(PCI_IO_END - PCI_IO_SIZE)
+/* == 0xffff7dfffec00000 */
 #define FIXADDR_TOP		(PCI_IO_START - SZ_2M)
 
 #define KERNEL_START      _text
@@ -90,6 +100,7 @@
 #define KASAN_THREAD_SHIFT	0
 #endif
 
+/* == 14 */
 #define MIN_THREAD_SHIFT	(14 + KASAN_THREAD_SHIFT)
 
 /*
@@ -99,6 +110,7 @@
 #if defined(CONFIG_VMAP_STACK) && (MIN_THREAD_SHIFT < PAGE_SHIFT)
 #define THREAD_SHIFT		PAGE_SHIFT
 #else
+/* 是这个 */
 #define THREAD_SHIFT		MIN_THREAD_SHIFT
 #endif
 
@@ -145,11 +157,31 @@
 /*
  * Memory types available.
  */
+/*
+ * memory type 并没有直接存放在页表项中，而是存放在 MAIR_ELn 中，页表项中使用
+ * 一个 3 位索引值(PTE_ATTRINDX())来查找 MAIR_ELn 。
+ *
+ * G: 表示 gathering(聚集)。聚集表示在同一个内存类型的区域中允许把多次访问内
+ *    存的操作合并成一次总线传输。如果地址被标记为 nG ，那么必须按照程序里面
+ *    的地址和长度访问。如果地址被标记为 G ，处理器可以把两个"写一个字节"的访
+ *    问合并成一个"写两个字节"的访问，也可以把对相同内存位置的多个访问合并，例
+ *    如读相同位置两次，处理器只需要读一次，为两条指令返回相同的结果。
+ * R: 表示 re-ordering(指令重排)。该属性决定对相同设备的多个访问是否可以重新排
+ *    序。如果地址被标记为"不重排序"，那么对同一个块的访问总是按照程序顺序执行。
+ * E: 表示 early write acknowledgement(提前写应答)。往外部设备写数据时，处理
+ *    器先把数据写入写缓冲区中，若使能了提前写应答，则数据到达写缓冲区时会发
+ *    送写应答；若没有使能了提前写应答，则数据到达外设时才发送写应答。
+ *
+ * 系统在 __cpu_setup(arch/arm64/mm/proc.S)初始化 MAIR 和内存类型。
+ */
 #define MT_DEVICE_nGnRnE	0
 #define MT_DEVICE_nGnRE		1
 #define MT_DEVICE_GRE		2
+/* NC(Non-Cacheable) 表示关闭高速缓存 */
 #define MT_NORMAL_NC		3
+/* 打开高速缓存，高速缓存为 write back 策略 */
 #define MT_NORMAL		4
+/* 打开高速缓存，高速缓存为 write through 策略 */
 #define MT_NORMAL_WT		5
 
 /*
@@ -181,9 +213,16 @@ extern s64			memstart_addr;
 #define PHYS_OFFSET		({ VM_BUG_ON(memstart_addr & 1); memstart_addr; })
 
 /* the virtual base of the kernel image (minus TEXT_OFFSET) */
+/* == 0xffff000010000000 。在 arch/arm64/kernel/head.S 定义和初始化 */
 extern u64			kimage_vaddr;
 
 /* the offset between the kernel virtual and physical mappings */
+/*
+ * 当系统刚初始化时，内核映像通过块映射的方式映射到 KIMAGE_VADDR +
+ * TEXT_OFFSET 的虚拟地址上，因为 kimage_voffset 表示内核映像虚拟地址和物理
+ * 地址之间的偏移量，其值为 0xfffeffffd0000000 。
+ * 在 arch/arm64/mm/mmu.c 定义，在 arch/arm64/kernel/head.S 初始化
+ */
 extern u64			kimage_voffset;
 
 static inline unsigned long kaslr_offset(void)
@@ -192,6 +231,7 @@ static inline unsigned long kaslr_offset(void)
 }
 
 /* the actual size of a user virtual address */
+/* == VA_BITS 。在 arch/arm64/mm/mmu.c 定义，在 arch/arm64/kernel/head.S 初始化 */
 extern u64			vabits_user;
 
 /*
@@ -242,6 +282,7 @@ extern u64			vabits_user;
  * space. Testing the top bit for the start of the region is a
  * sufficient check.
  */
+/* 0xffff800000000000 开始是线性映射空间(即 lm 地址空间) */
 #define __is_lm_address(addr)	(!!((addr) & BIT(VA_BITS - 1)))
 
 #define __lm_to_phys(addr)	(((addr) & ~PAGE_OFFSET) + PHYS_OFFSET)
@@ -291,6 +332,16 @@ static inline void *phys_to_virt(phys_addr_t x)
 
 /*
  * Drivers should NOT use these either.
+ */
+/*
+ * __pa_symbol()和 __pa()的作用都是把内核虚拟地址转换为物理地址。两者之间是有
+ * 区别的：内核中常常用 __pa_symbol()访问一些内核符号表的物理地址，如内核页表
+ * swapper_pg_dir 、代码段的符号 _text 或者 __init_begin 等，这些内核符号表的
+ * 链接地址在 vmalloc 区域，即从 KIMAGE_VADDR + TEXT_OFFSET 开始的虚拟地址，
+ * 它和内核空间的线性映射区是不相同的。 __pa()可以通过虚拟地址来确定区域。在
+ * 内存线性映射完成之前，不能直接通过 __pa()这个宏直接从线性映射地址转换到物
+ * 理地址。
+ * 用法可以参考 paging_init()。
  */
 #define __pa(x)			__virt_to_phys((unsigned long)(x))
 #define __pa_symbol(x)		__phys_addr_symbol(RELOC_HIDE((unsigned long)(x), 0))

@@ -22,6 +22,7 @@
 #define ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE	1
 #define ARM64_WORKAROUND_845719			2
 #define ARM64_HAS_SYSREG_GIC_CPUIF		3
+/* Privileged Access Never 特性用来禁止内核访问用户虚拟地址 */
 #define ARM64_HAS_PAN				4
 #define ARM64_HAS_LSE_ATOMICS			5
 #define ARM64_WORKAROUND_CAVIUM_23154		6

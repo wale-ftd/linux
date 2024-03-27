@@ -1039,6 +1039,12 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 	if (type == NULL || strcmp(type, "memory") != 0)
 		return 0;
 
+	/* 如果属性 device_type 的值是 memory ，说明这个节点描述物理内存信息 */
+
+	/*
+	 * 解析属性 linux,usable-memory ，如果不存在，那么解析属性 reg” 。这两个属性
+	 * 都用来定义物理内存范围。
+	 */
 	reg = of_get_flat_dt_prop(node, "linux,usable-memory", &l);
 	if (reg == NULL)
 		reg = of_get_flat_dt_prop(node, "reg", &l);
@@ -1061,6 +1067,7 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 		pr_debug(" - %llx ,  %llx\n", (unsigned long long)base,
 		    (unsigned long long)size);
 
+		/* 将解析出来的内存添加到 memblock.memory 中 */
 		early_init_dt_add_memory_arch(base, size);
 
 		if (!hotpluggable)

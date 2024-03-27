@@ -991,6 +991,7 @@ int irq_domain_alloc_descs(int virq, unsigned int cnt, irq_hw_number_t hwirq,
 	return virq;
 }
 
+/* 有定义 */
 #ifdef	CONFIG_IRQ_DOMAIN_HIERARCHY
 /**
  * irq_domain_create_hierarchy - Add a irqdomain into the hierarchy
@@ -1180,6 +1181,7 @@ EXPORT_SYMBOL_GPL(irq_domain_set_hwirq_and_chip);
  * @handler_data:	The interrupt flow handler data
  * @handler_name:	The interrupt handler name
  */
+/* 是这个 */
 void irq_domain_set_info(struct irq_domain *domain, unsigned int virq,
 			 irq_hw_number_t hwirq, struct irq_chip *chip,
 			 void *chip_data, irq_flow_handler_t handler,

@@ -28,6 +28,10 @@
 #ifndef __ASSEMBLY__
 
 typedef struct {
+    /*
+     * 软件 asid 。其中[63:asid_bits]存放软件 asid_generation ，
+     * [asid_bits:0]存放硬件 ASID
+     */
 	atomic64_t	id;
 	void		*vdso;
 	unsigned long	flags;

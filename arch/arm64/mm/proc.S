@@ -164,7 +164,12 @@ ENDPROC(cpu_do_resume)
  */
 ENTRY(cpu_do_switch_mm)
 	mrs	x2, ttbr1_el1
+	/* mmid 是一个宏，实现在 arch/arm64/include/asm/assembler.h */
 	mmid	x1, x1				// get mm->context.id
+	/*
+	 * phys_to_ttbr 是一个宏，实现在 arch/arm64/include/asm/pgtable.h ，对于
+	 * 48 位的地址总线，它是一个空操作
+	 */
 	phys_to_ttbr x3, x0
 
 alternative_if ARM64_HAS_CNP
@@ -172,11 +177,13 @@ alternative_if ARM64_HAS_CNP
 	orr     x3, x3, #TTBR_CNP_BIT
 1:
 alternative_else_nop_endif
+/* 未定义 */
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	bfi	x3, x1, #48, #16		// set the ASID field in TTBR0
 #endif
 	bfi	x2, x1, #48, #16		// set the ASID
 	msr	ttbr1_el1, x2			// in TTBR1 (since TCR.A1 is set)
+	/* 保证页表设置完成 */
 	isb
 	msr	ttbr0_el1, x3			// now update TTBR0
 	isb
@@ -426,6 +433,7 @@ ENTRY(__cpu_setup)
 	isb					// Unmask debug exceptions now,
 	enable_dbg				// since this is per-cpu
 	reset_pmuserenr_el0 x0			// Disable PMU access from EL0
+	/* ARMv8 最多可以定义 8 种不同的内存类型，而 Linux 内核只定义了 6 种。 */
 	/*
 	 * Memory region attributes for LPAE:
 	 *

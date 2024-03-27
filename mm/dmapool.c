@@ -42,14 +42,24 @@
 #define DMAPOOL_DEBUG 1
 #endif
 
+/*
+ * 用于分配小于一页的一致性 DMA buffer 。如果要分配页的整数倍的 DMA buffer ，
+ * 使用 dma_alloc_coherent()
+ *
+ * 由 dma_pool_create()实例化
+ */
 struct dma_pool {		/* the pool */
+	/* 用来将一致性 DMA 映射建立的页面组织成链表 */
 	struct list_head page_list;
 	spinlock_t lock;
+	/* 该 DMA pool 用来分配一致性 DMA 映射的缓冲区的大小，也称块大小 */
 	size_t size;
+	/* 进行 DMA 操作的设备对象指针 */
 	struct device *dev;
 	size_t allocation;
 	size_t boundary;
 	char name[32];
+	/* 用来将当前 DMA pool 对象加到 dev->dma_pools 链表中 */
 	struct list_head pools;
 };
 

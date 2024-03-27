@@ -43,6 +43,7 @@ struct reclaim_stat {
  */
 
 struct vm_event_state {
+    /* vm_event_item.h */
 	unsigned long event[NR_VM_EVENT_ITEMS];
 };
 

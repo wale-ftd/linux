@@ -20,6 +20,23 @@
  * GNU General Public License for more details.
 */
 
+/*
+ * 交换区的缺点是读写速度慢，影响程序的执行性能，为了缓解这个问题，内核 3.11
+ * 版本引入了 zswap ，它是交换页的轻量级压缩缓存，目前还是实验特性。 zswap 把
+ * 准备换出的页压缩到动态分配的内存池，仅当压缩缓存的大小达到限制时才会把压缩
+ * 缓存里面的页写到交换区。 zswap 以消耗处理器周期为代价，大幅度减少读写交换
+ * 区的次数，带来了重大的性能提升，因为解压缩比从交换区读更快。
+ *
+ * 编译内核时需要开启配置宏 CONFIG_ZSWAP 。 zswap 默认是禁止的，可以使用模块
+ * 参数"enabled"启用 zswap ：在引导内核时使用内核参数"zswap.enabled=1"，或者
+ * 在运行时执行"echo 1 > /sys/module/zswap/parameters/enabled"。
+ *
+ * 可以使用模块参数"max_pool_percent"设置压缩缓存占用内存的最大百分比，默认值
+ * 是 20 。例如：把压缩缓存占用内存的最大百分比设置成 25%，可以在引导内核时使
+ * 用内核参数"zswap.max_pool_percent=25"，或者在运行时执行
+ * "echo 25 > /sys/module/zswap/parameters/max_pool_percent"。
+ */
+
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/module.h>

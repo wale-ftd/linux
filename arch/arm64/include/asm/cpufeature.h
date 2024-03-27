@@ -580,6 +580,10 @@ static inline bool system_supports_fpsimd(void)
 	return !cpus_have_const_cap(ARM64_HAS_NO_FPSIMD);
 }
 
+/*
+ * true: 硬件不支持 PAN ，使用软件模拟 PAN
+ * false: 硬件支持 PAN 或 未使能软件模拟 PAN
+ */
 static inline bool system_uses_ttbr0_pan(void)
 {
 	return IS_ENABLED(CONFIG_ARM64_SW_TTBR0_PAN) &&

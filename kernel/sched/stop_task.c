@@ -117,6 +117,12 @@ static void update_curr_stop(struct rq *rq)
 /*
  * Simple, special scheduling class for the per-CPU stop tasks:
  */
+/*
+ * 最高优先级的调度类。在每个 CPU 上实现一个名为 "migration/N" 的内核线程， N 表示
+ * CPU 的编号。该内核线程的优先级最高，可以抢占其他调度类的进程来运行一些特殊的功
+ * 能，如负载均衡机制中的进程迁移和主动负载均衡(active_load_balance_cpu_stop())、
+ * CPU 热插拔、 softlockup 检测、 RCU 等
+ */
 const struct sched_class stop_sched_class = {
 	.next			= &dl_sched_class,
 

@@ -54,8 +54,10 @@ struct vm_area_struct;
  * be used in bit comparisons.
  */
 #define __GFP_DMA	((__force gfp_t)___GFP_DMA)
+/* 从高端内存区域分配页 */
 #define __GFP_HIGHMEM	((__force gfp_t)___GFP_HIGHMEM)
 #define __GFP_DMA32	((__force gfp_t)___GFP_DMA32)
+/* 指定申请可移动页 */
 #define __GFP_MOVABLE	((__force gfp_t)___GFP_MOVABLE)  /* ZONE_MOVABLE allowed */
 #define GFP_ZONEMASK	(__GFP_DMA|__GFP_HIGHMEM|__GFP_DMA32|__GFP_MOVABLE)
 
@@ -86,10 +88,22 @@ struct vm_area_struct;
  *
  * %__GFP_ACCOUNT causes the allocation to be accounted to kmemcg.
  */
+/* 指定申请可回收页 */
 #define __GFP_RECLAIMABLE ((__force gfp_t)___GFP_RECLAIMABLE)
+/*
+ * 指明调用者打算写物理页。只要有可能，把这些页分布到本地节点的所有区域，避
+ * 免所有脏页在一个内存区域。
+ */
 #define __GFP_WRITE	((__force gfp_t)___GFP_WRITE)
+/*
+ * 实施 cpuset 内存分配策略。 cpuset 是控制组(cgroup)的一个子系统，提供了把
+ * 处理器和内存节点的集合分配给一组进程的机制，即允许进程在哪些处理器上运行
+ * 和从哪些内存节点申请页。
+ */
 #define __GFP_HARDWALL   ((__force gfp_t)___GFP_HARDWALL)
+/* 强制从指定节点分配页 */
 #define __GFP_THISNODE	((__force gfp_t)___GFP_THISNODE)
+/* 把分配的页记账到内核内存控制组 */
 #define __GFP_ACCOUNT	((__force gfp_t)___GFP_ACCOUNT)
 
 /**
@@ -114,9 +128,27 @@ struct vm_area_struct;
  * %__GFP_NOMEMALLOC is used to explicitly forbid access to emergency reserves.
  * This takes precedence over the %__GFP_MEMALLOC flag if both are set.
  */
+/*
+ * __GFP_ATOMIC 是优先级比较高的分配行为，允许访问部分系统预留内存。不能回收页或
+ * 者睡眠。典型的例子是中断处理程序
+ */
 #define __GFP_ATOMIC	((__force gfp_t)___GFP_ATOMIC)
+/*
+ * 表示页面分配器调用的进程具有很高的优先级，允许访问部分系统预留内存。如对于实
+ * 时进程，必须保证这次分配成功它才能继续运行；如创建一个 I/O 上下文，把脏页回写
+ * 到存储设备
+ */
 #define __GFP_HIGH	((__force gfp_t)___GFP_HIGH)
+/*
+ * 如果申请页时设置了标志位 __GFP_MEMALLOC ，即调用者承诺"给我少量紧急保留内存
+ * 使用，我可以释放更多的内存"，那么可以使用所有紧急保留内存。
+ * 类似的有 PF_MEMALLOC
+ */
 #define __GFP_MEMALLOC	((__force gfp_t)___GFP_MEMALLOC)
+/*
+ * 禁止访问紧急保留内存，如果 __GFP_NOMEMALLOC 和 __GFP_MEMALLOC 同时被设置，
+ * __GFP_NOMEMALLOC 优先级比 __GFP_MEMALLOC 高
+ */
 #define __GFP_NOMEMALLOC ((__force gfp_t)___GFP_NOMEMALLOC)
 
 /**
@@ -188,13 +220,25 @@ struct vm_area_struct;
  * loop around allocator.
  * Using this flag for costly allocations is _highly_ discouraged.
  */
+/* 允许读写存储设备 */
 #define __GFP_IO	((__force gfp_t)___GFP_IO)
+/*
+ * 允许向下调用到底层文件系统。当文件系统申请页的时候，如果内存严重不足，
+ * 直接回收页，把脏页回写到存储设备，调用文件系统的函数，可能导致死锁。为
+ * 了避免死锁，文件系统申请页的时候应该清除这个标志位。
+ */
 #define __GFP_FS	((__force gfp_t)___GFP_FS)
+/* 调用者可以直接回收页。常用于 GFP_KERNEL/GFP_HIGHUSER_MOVABLE */
 #define __GFP_DIRECT_RECLAIM	((__force gfp_t)___GFP_DIRECT_RECLAIM) /* Caller can reclaim */
+/* 当空闲页数达到 low 水位的时候，调用者想要唤醒页回线程 kswapd ，即异步回收页 */
 #define __GFP_KSWAPD_RECLAIM	((__force gfp_t)___GFP_KSWAPD_RECLAIM) /* kswapd can wake */
+/* 允许直接回收页和异步回收页 */
 #define __GFP_RECLAIM ((__force gfp_t)(___GFP_DIRECT_RECLAIM|___GFP_KSWAPD_RECLAIM))
+/* 允许重试，重试多次以后放弃，分配可能失败 */
 #define __GFP_RETRY_MAYFAIL	((__force gfp_t)___GFP_RETRY_MAYFAIL)
+/* 必须无限次重试，因为调用者不能处理分配失败 */
 #define __GFP_NOFAIL	((__force gfp_t)___GFP_NOFAIL)
+/* 不要重试，当直接回收页和内存碎片整理不能使分配成功的时候，应该放弃 */
 #define __GFP_NORETRY	((__force gfp_t)___GFP_NORETRY)
 
 /**
@@ -210,6 +254,10 @@ struct vm_area_struct;
  * %__GFP_ZERO returns a zeroed page on success.
  */
 #define __GFP_NOWARN	((__force gfp_t)___GFP_NOWARN)
+/*
+ * 如果设置了标志位 __GFP_COMP 并且分配了一个阶数大于 0 的页块，页分配器会把页块
+ * 组成复合页(compound page)。复合页最常见的用处是创建巨型页
+ */
 #define __GFP_COMP	((__force gfp_t)___GFP_COMP)
 #define __GFP_ZERO	((__force gfp_t)___GFP_ZERO)
 
@@ -305,12 +353,19 @@ struct vm_area_struct;
 #define GFP_MOVABLE_MASK (__GFP_RECLAIMABLE|__GFP_MOVABLE)
 #define GFP_MOVABLE_SHIFT 3
 
+/*
+ * 提取 gfp_flags 的 bit[4:3] 位，把分配标志转换成迁移类型。
+ * 申请页时，可以使用标志 __GFP_MOVABLE 指定申请可移动页，使用标志
+ * __GFP_RECLAIMABLE 指定申请可回收页，如果没有指定这两个标志，表示申请不可
+ * 移动页。
+ */
 static inline int gfpflags_to_migratetype(const gfp_t gfp_flags)
 {
 	VM_WARN_ON((gfp_flags & GFP_MOVABLE_MASK) == GFP_MOVABLE_MASK);
 	BUILD_BUG_ON((1UL << GFP_MOVABLE_SHIFT) != ___GFP_MOVABLE);
 	BUILD_BUG_ON((___GFP_MOVABLE >> GFP_MOVABLE_SHIFT) != MIGRATE_MOVABLE);
 
+	/* 如果禁用根据可移动性分组，那么总是申请不可移动页 */
 	if (unlikely(page_group_by_mobility_disabled))
 		return MIGRATE_UNMOVABLE;
 
@@ -387,6 +442,15 @@ static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 #error GFP_ZONES_SHIFT too large to create GFP_ZONE_TABLE integer
 #endif
 
+/*
+ * GFP_ZONE_TABLE 定义了 gfp 到首选 zone 的映射表。 GFP_ZONE_TABLE 是一个常
+ * 量，编译器在编译时会进行优化，直接计算出结果，不会等到运行程序的时候才计
+ * 算数值。
+ *
+ * 为什么要使用 OPT_ZONE_DMA ，而不使用 ZONE_DMA ？
+ * 因为 ZONE_DMA 需要定义 CONFIG_ZONE_DMA ，引入 OPT_ZONE_DMA 可以提高代码的
+ * 简洁性和可读性。
+ */
 #define GFP_ZONE_TABLE ( \
 	(ZONE_NORMAL << 0 * GFP_ZONES_SHIFT)				       \
 	| (OPT_ZONE_DMA << ___GFP_DMA * GFP_ZONES_SHIFT)		       \
@@ -415,6 +479,7 @@ static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 	| 1 << (___GFP_MOVABLE | ___GFP_DMA32 | ___GFP_DMA | ___GFP_HIGHMEM)  \
 )
 
+/* 根据分配标志得到首选的 zone 类型 */
 static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	enum zone_type z;

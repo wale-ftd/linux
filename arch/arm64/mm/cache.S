@@ -49,15 +49,43 @@ ENTRY(__flush_icache_range)
  *	- end     - virtual end address of region
  */
 ENTRY(__flush_cache_user_range)
+    /*
+     * uaccess_ttbr0_enable 宏用来使能在内核态访问用户地址空间。这里主要针对
+     * 使用的软件来模拟特权模式禁止访问(PAN)功能，也就是使能了
+     * CONFIG_ARM64_SW_TTBR0_PAN 宏。
+     */
 	uaccess_ttbr0_enable x2, x3, x4
+/*
+ * alternative_if 是一个宏，它的实现在 arch/arm64/include/asm/alternative.h 中
+ *
+ * ARM64_HAS_CACHE_IDC 表示以 PoU 做数据高速缓存管理时不需要对其做额外的清除
+ * 操作，因此直接插入一个 DSB 指令即可完成数据高速缓存的清除操作。
+ *
+ * ARM64_HAS_CACHE_IDC 特性是在 arm64_features[] 数组中定义的，它的实现在
+ * arch/arm64/kernel/cpufeature.c 中。
+ */
 alternative_if ARM64_HAS_CACHE_IDC
 	dsb	ishst
 	b	7f
 alternative_else_nop_endif
+    /*
+     * 处理器不支持 ARM64_HAS_CACHE_IDC 时，必须调用 DC 指令来清除数据高速缓存。
+     * dcache_line_size 宏用来获取高速缓存行的大小，并存放到 x2 寄存器中。
+     */
 	dcache_line_size x2, x3
 	sub	x3, x2, #1
+	/* 起始地址 start(x0) 按高速缓存行的大小对齐，对齐后的地址存放在 x4 中 */
 	bic	x4, x0, x3
+/*
+ * 从起始地址 start 到结束地址 end ，按照高速缓存行依次调用 DC 指令来清除对应
+ * 的高速缓存并使它失效。
+ */
 1:
+/*
+ * ARM64_WORKAROUND_CLEAN_CACHE(在 arch/arm64/kernel/cpu_errata.c 定义)表示
+ * 这里有一个处理器硬件故障需要一些特殊处理，因此会调用 civac 辅助操作符(表
+ * 示以 PoC 清除指定的虚拟地址对应的高速缓存并使它失效)来清除数据高速缓存。
+ */
 user_alt 9f, "dc cvau, x4",  "dc civac, x4",  ARM64_WORKAROUND_CLEAN_CACHE
 	add	x4, x4, x2
 	cmp	x4, x1
@@ -65,6 +93,12 @@ user_alt 9f, "dc cvau, x4",  "dc civac, x4",  ARM64_WORKAROUND_CLEAN_CACHE
 	dsb	ish
 
 7:
+/*
+ * ARM64_HAS_CACHE_DIC(在 arch/arm64/kernel/cpufeature.c 定义) 表示以 PoU 做
+ * 指令高速缓存管理时不需要对其做额外的清除操作，因此直接插入一个 isb 指令即
+ * 可完成指令高速缓存的清除工作。否则，就需要调用 invalidate_icache_by_line
+ * 宏来清除指令高速缓存。
+ */
 alternative_if ARM64_HAS_CACHE_DIC
 	isb
 	b	8f
@@ -72,6 +106,7 @@ alternative_else_nop_endif
 	invalidate_icache_by_line x0, x1, x2, x3, 9f
 8:	mov	x0, #0
 1:
+    /* uaccess_ttbr0_disable 宏用来关闭在内核态访问用户地址空间 */
 	uaccess_ttbr0_disable x1, x2
 	ret
 9:

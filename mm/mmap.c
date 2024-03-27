@@ -95,6 +95,7 @@ static void unmap_region(struct mm_struct *mm,
  *								w: (no) no
  *								x: (yes) yes
  */
+/* P 表示 private ， S 表示 shared ，后面的数字分别表示可读、可写、可执行 */
 pgprot_t protection_map[16] __ro_after_init = {
 	__P000, __P001, __P010, __P011, __P100, __P101, __P110, __P111,
 	__S000, __S001, __S010, __S011, __S100, __S101, __S110, __S111
@@ -109,6 +110,7 @@ static inline pgprot_t arch_filter_pgprot(pgprot_t prot)
 
 pgprot_t vm_get_page_prot(unsigned long vm_flags)
 {
+    /* vm_flags = VM_DATA_DEFAULT_FLAGS 对应的 PTE 属性为 PAGE_READONLY */
 	pgprot_t ret = __pgprot(pgprot_val(protection_map[vm_flags &
 				(VM_READ|VM_WRITE|VM_EXEC|VM_SHARED)]) |
 			pgprot_val(arch_vm_get_page_prot(vm_flags)));
@@ -123,6 +125,10 @@ static pgprot_t vm_pgprot_modify(pgprot_t oldprot, unsigned long vm_flags)
 }
 
 /* Update vma->vm_page_prot to reflect vma->vm_flags. */
+/*
+ * 有一个让属性降级的功能，也就是需要把一些可写并且共享映射的页面在初始化时
+ * 设置为只读的，这样可以跟踪写操作的事件
+ */
 void vma_set_page_prot(struct vm_area_struct *vma)
 {
 	unsigned long vm_flags = vma->vm_flags;
@@ -188,6 +194,16 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
 
 static int do_brk_flags(unsigned long addr, unsigned long request, unsigned long flags,
 		struct list_head *uf);
+/*
+ *         vma->start
+ * oldbrk              newbrk + PAGE_SIZE
+ *
+ *                               vma->start
+ * oldbrk    newbrk + PAGE_SIZE
+ *
+ * vma->start          vm->end
+ *             oldbrk
+ */
 SYSCALL_DEFINE1(brk, unsigned long, brk)
 {
 	unsigned long retval;
@@ -233,6 +249,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	newbrk = PAGE_ALIGN(brk);
 	oldbrk = PAGE_ALIGN(mm->brk);
 	if (oldbrk == newbrk) {
+    /* 说明这次 brk 的增量很小，没有跨到下一页，直接更新 brk 即可，无需分配新页 */
 		mm->brk = brk;
 		goto success;
 	}
@@ -271,6 +288,10 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	mm->brk = brk;
 
 success:
+    /*
+     * 应用程序可以使用 mlockall()系统调用来把进程中全部的进程虚拟地址空间
+     * 加锁，防止内存被交换出去
+     */
 	populate = newbrk > oldbrk && (mm->def_flags & VM_LOCKED) != 0;
 	if (downgraded)
 		up_read(&mm->mmap_sem);
@@ -278,6 +299,7 @@ success:
 		up_write(&mm->mmap_sem);
 	userfaultfd_unmap_complete(mm, &uf);
 	if (populate)
+        /* 分配物理内存并建立映射 */
 		mm_populate(oldbrk, newbrk - oldbrk);
 	return brk;
 
@@ -520,6 +542,14 @@ anon_vma_interval_tree_post_update_vma(struct vm_area_struct *vma)
 		anon_vma_interval_tree_insert(avc, &avc->anon_vma->rb_root);
 }
 
+/*
+ * 为新 VMA 查找合适的插入位置。遍历用户进程红黑树中的 VMA ，然后根据 addr
+ * 来查找最合适插入红黑树的节点，最终 rb_link 指针指向最合适节点的 rb_left
+ * 或 rb_right 指针本身的地址。
+ *
+ * 若返回 0 ，表示寻找到了最合适插入的节点；若返回 -ENOMEM ，表示和现有的
+ * VMA 重叠，调用者会调用 do_mumap()函数来释放这段重叠的空间。
+ */
 static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 		unsigned long end, struct vm_area_struct **pprev,
 		struct rb_node ***rb_link, struct rb_node **rb_parent)
@@ -634,6 +664,7 @@ __vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 	__vma_link_rb(mm, vma, rb_link, rb_parent);
 }
 
+/* 将新创建的 VMA 添加到 mm->mmap 链表和红黑树中 */
 static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 			struct vm_area_struct *prev, struct rb_node **rb_link,
 			struct rb_node *rb_parent)
@@ -645,7 +676,12 @@ static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 		i_mmap_lock_write(mapping);
 	}
 
+	/* 把虚拟内存区域添加到 mm 链表和红黑树中 */
 	__vma_link(mm, vma, prev, rb_link, rb_parent);
+	/*
+	 * 如果虚拟内存区域关联文件，那么把虚拟内存区域添加到文件的区间树中，文
+	 * 件的区间树用来跟踪文件被映射到哪些虚拟内存区域
+	 */
 	__vma_link_file(vma);
 
 	if (mapping)
@@ -1180,6 +1216,7 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
 				is_mergeable_anon_vma(prev->anon_vma,
 						      next->anon_vma, NULL)) {
 							/* cases 1, 6 */
+            /* 做真正的合并 */
 			err = __vma_adjust(prev, prev->vm_start,
 					 next->vm_end, prev->vm_pgoff, NULL,
 					 prev);
@@ -1380,6 +1417,7 @@ static inline bool file_mmap_ok(struct file *file, struct inode *inode,
 /*
  * The caller must hold down_write(&current->mm->mmap_sem).
  */
+/* mmap -> ksys_mmap_pgoff() -> vm_mmap_pgoff() -> do_mmap_pgoff() */
 unsigned long do_mmap(struct file *file, unsigned long addr,
 			unsigned long len, unsigned long prot,
 			unsigned long flags, vm_flags_t vm_flags,
@@ -1556,6 +1594,10 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			vm_flags |= VM_NORESERVE;
 	}
 
+    /*
+     * pgoff 对于文件映射，表示文件内的偏移量；对于共享匿名映射，为 0；对于
+     * 私有匿名映射，为 addr >> PAGE_SHIFT
+     */
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
 	if (!IS_ERR_VALUE(addr) &&
 	    ((vm_flags & VM_LOCKED) ||
@@ -1564,6 +1606,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	return addr;
 }
 
+/* 被 mmap 系统调用调用 */
 unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 			      unsigned long prot, unsigned long flags,
 			      unsigned long fd, unsigned long pgoff)
@@ -1595,6 +1638,12 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 		 * taken when vm_ops->mmap() is called
 		 * A dummy user value is used because we are not locking
 		 * memory so no accounting is necessary
+		 */
+		/*
+		 * 在 hugetlbfs 中创建文件 anon_hugepage ，并且创建该文件的一个打开实
+		 * 例 file 。注意：文件名没有实际意义，创建匿名巨型页映射两次，就会在
+		 * hugetlbfs 文件系统中创建两个名为 anon_hugepage 的文件，这两个文件
+		 * 没有关联
 		 */
 		file = hugetlb_file_setup(HUGETLB_ANON_FILE, len,
 				VM_NORESERVE,
@@ -1660,6 +1709,7 @@ int vma_wants_writenotify(struct vm_area_struct *vma, pgprot_t vm_page_prot)
 		return 0;
 
 	/* The backer wishes to know when pages are first written to? */
+    /* 文件系统通常会设置 vm_ops->page_mkwrite */
 	if (vm_ops && (vm_ops->page_mkwrite || vm_ops->pfn_mkwrite))
 		return 1;
 
@@ -1799,6 +1849,12 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		addr = vma->vm_start;
 		vm_flags = vma->vm_flags;
 	} else if (vm_flags & VM_SHARED) {
+	/*
+	 * 共享匿名映射的实现原理和文件映射相同，区别是共享匿名映射关联的文件是内
+	 * 核创建的内部文件。在内存文件系统 tmpfs 中创建一个名为"/dev/zero"的文件，
+	 * 名字没有意义，创建两个共享匿名映射就会创建两个名为"/dev/zero"的文件，
+	 * 两个文件是独立的，毫无关系
+	 */
 		error = shmem_zero_setup(vma);
 		if (error)
 			goto free_vma;
@@ -1840,6 +1896,11 @@ out:
 	 */
 	vma->vm_flags |= VM_SOFTDIRTY;
 
+    /*
+     * 根据虚拟内存标志 vma->vm_flags 计算页保护位 vma-> vm_page_prot ，如果
+     * 共享的可写映射想要把页标记为只读，目的是跟踪写事件，那么从页保护位删除
+     * 可写位
+     */
 	vma_set_page_prot(vma);
 
 	return addr;
@@ -2178,6 +2239,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 }
 #endif
 
+/*
+ * 在进程地址空间中寻找一个可以使用在线性地址区间，返回一段没有映射过的
+ * 空间的起始地址。其中会用具体架构中的实现
+ */
 unsigned long
 get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 		unsigned long pgoff, unsigned long flags)
@@ -2223,6 +2288,19 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 EXPORT_SYMBOL(get_unmapped_area);
 
 /* Look up the first VMA which satisfies  addr < vm_end,  NULL if none. */
+/*
+ * 根据给定 addr 查找满足如下条件之一的 VMA ：
+ *   1. addr 在 VMA 空间范围内，即 vma->vm_start <= addr < vma->vm_end 。
+ *   2. 距离 addr 最近并且 VMA 的结束地址大于 addr 的 VMA 。
+ * +------+------+------+------+------+
+ * | .... | VMA1 | .... | VMA2 | .... |
+ * +------+------+------+------+------+
+ *                 ^       ^
+ *                addr1   addr2
+ * 无论 addr 在 addr1 还是 add2 ，都返回 VMA2 。
+ *
+ * 类似的函数有: find_vma_intersection(), find_vma_prev()
+ */
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
 	struct rb_node *rb_node;
@@ -2259,6 +2337,7 @@ EXPORT_SYMBOL(find_vma);
 /*
  * Same as find_vma, but also return a pointer to the previous VMA in *pprev.
  */
+/* 返回 vma->vm_prev ，即返回第一个 vma->vm_end 小于 addr 的 VMA */
 struct vm_area_struct *
 find_vma_prev(struct mm_struct *mm, unsigned long addr,
 			struct vm_area_struct **pprev)
@@ -2511,6 +2590,7 @@ static int __init cmdline_parse_stack_guard_gap(char *p)
 }
 __setup("stack_guard_gap=", cmdline_parse_stack_guard_gap);
 
+/* 未定义 */
 #ifdef CONFIG_STACK_GROWSUP
 int expand_stack(struct vm_area_struct *vma, unsigned long address)
 {
@@ -2533,11 +2613,13 @@ find_extend_vma(struct mm_struct *mm, unsigned long addr)
 	return prev;
 }
 #else
+/* 是这个 */
 int expand_stack(struct vm_area_struct *vma, unsigned long address)
 {
 	return expand_downwards(vma, address);
 }
 
+/* 是这个 */
 struct vm_area_struct *
 find_extend_vma(struct mm_struct *mm, unsigned long addr)
 {
@@ -2553,6 +2635,7 @@ find_extend_vma(struct mm_struct *mm, unsigned long addr)
 	if (!(vma->vm_flags & VM_GROWSDOWN))
 		return NULL;
 	start = vma->vm_start;
+    /* 从 vma->vm_start 向下扩大到 addr */
 	if (expand_stack(vma, addr))
 		return NULL;
 	if (vma->vm_flags & VM_LOCKED)
@@ -2810,6 +2893,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	}
 
 	/* Detach vmas from rbtree */
+	/* 把所有删除目标从进程的虚拟内存区域链表和树中删除，单独组成一条临时的链表 */
 	detach_vmas_to_be_unmapped(mm, vma, prev, end);
 
 	/*
@@ -2821,6 +2905,7 @@ int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
 	if (downgrade)
 		downgrade_write(&mm->mmap_sem);
 
+	/* 针对所有删除目标，在进程的页表中删除映射，并且从处理器的页表缓存中删除映射 */
 	unmap_region(mm, vma, prev, start, end);
 
 	/* Fix up all other VM information */
@@ -3001,6 +3086,10 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	/*
 	 * Clear old maps.  this also does some error checking for us
 	 */
+	/*
+     * 若返回 0 ，表示寻找到了最合适插入的节点；若返回 -ENOMEM ，表示和
+     * 现有的 VMA 重叠，调用 do_mumap()函数来释放这段重叠的空间。
+     */
 	while (find_vma_links(mm, addr, addr + len, &prev, &rb_link,
 			      &rb_parent)) {
 		if (do_munmap(mm, addr, len, uf))
@@ -3037,6 +3126,11 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	vma->vm_end = addr + len;
 	vma->vm_pgoff = pgoff;
 	vma->vm_flags = flags;
+    /*
+     * vma flags 转换成 page prot ，page prot 最终需要设置到页表项中，但
+     * 现在还不会设置到硬件页表中。通常情况下通过 page fault 处理函数来
+     * 分配物理内存并设置 PTE 和 PTE 属性。
+     */
 	vma->vm_page_prot = vm_get_page_prot(flags);
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 out:
@@ -3161,6 +3255,7 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 	struct vm_area_struct *prev;
 	struct rb_node **rb_link, *rb_parent;
 
+    /* 查找要插入的位置 */
 	if (find_vma_links(mm, vma->vm_start, vma->vm_end,
 			   &prev, &rb_link, &rb_parent))
 		return -ENOMEM;

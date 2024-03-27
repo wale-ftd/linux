@@ -799,6 +799,10 @@ madvise_behavior_valid(int behavior)
  *  -EBADF  - map exists, but area maps something that isn't a file.
  *  -EAGAIN - a kernel resource was temporarily unavailable.
  */
+/*
+ * 用来向内核提出内存使用的建议，应用程序告诉内核期望怎样使用指定的虚拟内存区
+ * 域，以便内核可以选择合适的预读和缓存技术
+ */
 SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
 {
 	unsigned long end, tmp;

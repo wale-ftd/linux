@@ -91,6 +91,7 @@ retry:
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	pte = *ptep;
 	if (!pte_present(pte)) {
+    /* 页面不在内存中并且未设置 PTE_PROT_NONE */
 		swp_entry_t entry;
 		/*
 		 * KSM's break_ksm() relies upon recognizing a ksm page
@@ -98,25 +99,33 @@ retry:
 		 * need migration_entry_wait().
 		 */
 		if (likely(!(flags & FOLL_MIGRATION)))
+        /* 这个页面没有在页面合并过程中出现 */
 			goto no_page;
 		if (pte_none(pte))
 			goto no_page;
 		entry = pte_to_swp_entry(pte);
 		if (!is_migration_entry(entry))
 			goto no_page;
+
+        /* PTE 是正在合并的 swap 页面 */
+
 		pte_unmap_unlock(ptep, ptl);
+        /* 等待这个页面合并完成后再尝试 */
 		migration_entry_wait(mm, pmd, address);
 		goto retry;
 	}
 	if ((flags & FOLL_NUMA) && pte_protnone(pte))
 		goto no_page;
 	if ((flags & FOLL_WRITE) && !can_follow_write_pte(pte, flags)) {
+    /* 分配掩码支持可写属性，但 PTE 只具有只读属性 */
 		pte_unmap_unlock(ptep, ptl);
 		return NULL;
 	}
 
+    /* 返回普通映射页面的 page 数据结构 */
 	page = vm_normal_page(vma, address, pte);
 	if (!page && pte_devmap(pte) && (flags & FOLL_GET)) {
+    /* 处理设备映射页面 */
 		/*
 		 * Only return device mapping pages in the FOLL_GET case since
 		 * they are only valid while holding the pgmap reference.
@@ -133,6 +142,7 @@ retry:
 			goto out;
 		}
 
+        /* 处理特殊情况：系统零页 */
 		if (is_zero_pfn(pte_pfn(pte))) {
 			page = pte_page(pte);
 		} else {
@@ -399,6 +409,10 @@ static struct page *follow_p4d_mask(struct vm_area_struct *vma,
  * an error pointer if there is a mapping to something not represented
  * by a page descriptor (see also vm_normal_page()).
  */
+/*
+ * 查看 VMA 中的虚拟页面是否已经分配了物理内存，即通过虚拟地址查找对应的 page 。
+ * 用于返回在用户进程地址空间中已经有映射的普通映射页面的 page 数据结构
+ */
 struct page *follow_page_mask(struct vm_area_struct *vma,
 			      unsigned long address, unsigned int flags,
 			      struct follow_page_context *ctx)
@@ -436,9 +450,14 @@ struct page *follow_page_mask(struct vm_area_struct *vma,
 		return no_page_table(vma, flags);
 	}
 
+    /* Linux 可以支持 5 级页表，但 ARM64 只支持 4 级页表 */
 	return follow_p4d_mask(vma, address, pgd, flags, ctx);
 }
 
+/*
+ * 通过虚拟地址 addr 寻找相应的物理页面，返回普通映射页面对应的 page ，期间
+ * 会查询页表。在页面合并和 KSM 中有广泛的应用
+ */
 struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 			 unsigned int foll_flags)
 {
@@ -532,6 +551,7 @@ static int faultin_page(struct task_struct *tsk, struct vm_area_struct *vma,
 		fault_flags |= FAULT_FLAG_TRIED;
 	}
 
+    /* 相当于人为触发一个 page fault */
 	ret = handle_mm_fault(vma, address, fault_flags);
 	if (ret & VM_FAULT_ERROR) {
 		int err = vm_fault_to_errno(ret, *flags);
@@ -671,6 +691,7 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
  * instead of __get_user_pages. __get_user_pages should be used only if
  * you need some special @gup_flags.
  */
+/* 为进程地址空间分配物理内存并且建立映射关系 */
 static long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 		unsigned long start, unsigned long nr_pages,
 		unsigned int gup_flags, struct page **pages,
@@ -715,6 +736,7 @@ static long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				ret = -EFAULT;
 				goto out;
 			}
+            /* VMA 是否支持巨页 */
 			if (is_vm_hugetlb_page(vma)) {
 				i = follow_hugetlb_page(mm, vma, pages, vmas,
 						&start, &nr_pages, i,
@@ -733,8 +755,10 @@ retry:
 		}
 		cond_resched();
 
+        /* 查看 VMA 中的虚拟页面是否已经分配了物理内存 */
 		page = follow_page_mask(vma, start, foll_flags, &ctx);
 		if (!page) {
+            /* 人为触发一个 page fault */
 			ret = faultin_page(tsk, vma, start, &foll_flags,
 					nonblocking);
 			switch (ret) {
@@ -763,6 +787,7 @@ retry:
 		}
 		if (pages) {
 			pages[i] = page;
+            /* 刷新页面对应的高速缓存 */
 			flush_anon_page(vma, page, start);
 			flush_dcache_page(page);
 			ctx.page_mask = 0;
@@ -1116,6 +1141,26 @@ EXPORT_SYMBOL(get_user_pages_remote);
  * passing of a locked parameter.  We also obviously don't pass
  * FOLL_REMOTE in here.
  */
+/*
+ * 用于为用户态的虚拟内存空间分配物理内存并建立相应的映射关系。主要用于锁住
+ * 内存，即保证用户空间分配的内存不会被释放。很多驱动程序(如 V4L2)使用这个
+ * 接口函数来为用户态程序分配物理内存
+ *
+ * 通常一个应用程序使用 malloc 或者 mmap 申请到的只是虚拟内存，只有在第一次
+ * 访问该地址时触发 page fault 才为其申请物理内存。整个映射过程其实用户是无
+ * 法感知，但是触发一次 page fault 非常耗时。有时应用程序为了优化性能，通常
+ * 采用 pin memory 的形式即使用 mmap/malloc 时提前将虚拟内存与对应物理内存
+ * 锁定，以提高性能，这也是很多程序常用优化方法。
+ * pin memory 还有另外一个优势就是可以防止内存被 swap out ，如果在进程切换时
+ * 该物理内存被 swap out ，下次读取还需要从磁盘加载到内存中，整个过程非常耗
+ * 时，通过使用 pin memory 可以将一些主要常用的内存锁住，以防止被置换出去同
+ * 时防止进行各种原因造成的页迁移，以提高程序性能。
+ * pin memory 最大坏处就是：如果每个程序都大量使用 pin memory ，那么最后将会
+ * 导致没有物理内存可用，所以一般社区开发不建议在大量长期时候的内存使用
+ * pin memory 类型内存。
+ * 除了应用程序使用 pin memory 之外，在很多驱动程序中也经常用到 pin memory ，
+ * 例如网卡会将用于收报包内存使用 pin memory 内存以防止被置换出去。
+ */
 long get_user_pages(unsigned long start, unsigned long nr_pages,
 		unsigned int gup_flags, struct page **pages,
 		struct vm_area_struct **vmas)
@@ -1209,6 +1254,7 @@ EXPORT_SYMBOL(get_user_pages_longterm);
  * If @nonblocking is non-NULL, it must held for read only and may be
  * released.  If it's released, *@nonblocking will be set to 0.
  */
+/* 人为制造缺页异常并完成地址映射 */
 long populate_vma_page_range(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end, int *nonblocking)
 {
@@ -1244,6 +1290,7 @@ long populate_vma_page_range(struct vm_area_struct *vma,
 	 * We made sure addr is within a VMA, so the following will
 	 * not result in a stack expansion that recurses back here.
 	 */
+	/* 为进程地址空间分配物理内存并且建立映射关系 */
 	return __get_user_pages(current, mm, start, nr_pages, gup_flags,
 				NULL, NULL, nonblocking);
 }

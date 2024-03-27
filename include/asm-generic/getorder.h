@@ -47,6 +47,7 @@ int __get_order(unsigned long size)
  * This function may be used to initialise variables with compile time
  * evaluations of constants.
  */
+/* 获取内存长度的分配阶 */
 #define get_order(n)						\
 (								\
 	__builtin_constant_p(n) ? (				\

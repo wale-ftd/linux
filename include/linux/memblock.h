@@ -38,8 +38,14 @@ extern unsigned long long max_possible_pfn;
  */
 enum memblock_flags {
 	MEMBLOCK_NONE		= 0x0,	/* No special request */
+	/* 在系统运行过程中可以拔出或插入物理内存 */
 	MEMBLOCK_HOTPLUG	= 0x1,	/* hotpluggable region */
+	/*
+	 * 内存镜像是内存冗余技术的一种，工作原理与硬盘的热备份类似，将内存数据做两
+	 * 个复制，分别放在主内存和镜像内存中
+	 */
 	MEMBLOCK_MIRROR		= 0x2,	/* mirrored region */
+	/* 不添加到内核直接映射区域(即线性映射区域) */
 	MEMBLOCK_NOMAP		= 0x4,	/* don't add to kernel direct mapping */
 };
 
@@ -69,6 +75,7 @@ struct memblock_region {
  */
 struct memblock_type {
 	unsigned long cnt;
+	/* regions 的总元素个数 */
 	unsigned long max;
 	phys_addr_t total_size;
 	struct memblock_region *regions;
@@ -84,11 +91,21 @@ struct memblock_type {
  * @physmem: all physical memory
  */
 struct memblock {
+	/* 真表示从低地址向上分配，假表示从高地址向下分配。默认是假 */
 	bool bottom_up;  /* is bottom up direction? */
+	/* 可分配内存的最大物理地址 */
 	phys_addr_t current_limit;
+	/* 包括已分配的内存和未分配的内存 */
 	struct memblock_type memory;
+	/* 已分配的内存 */
 	struct memblock_type reserved;
 #ifdef CONFIG_HAVE_MEMBLOCK_PHYS_MAP
+	/*
+	 * physmem 和 memory 的区别是：memory 是 physmem 的子集，在引导内核时可以使
+	 * 用内核参数"mem=nn[KMG]"指定可用内存的大小，导致内核不能看见所有内存；
+	 * physmem 总是包含所有内存范围， memory 只包含内核参数"mem="指定的可用内存
+	 * 范围。
+	 */
 	struct memblock_type physmem;
 #endif
 };

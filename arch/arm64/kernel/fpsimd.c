@@ -241,6 +241,7 @@ void fpsimd_save(void)
 	WARN_ON(!in_softirq() && !irqs_disabled());
 
 	if (!test_thread_flag(TIF_FOREIGN_FPSTATE)) {
+	/* 处理器的浮点状态是当前进程 */
 		if (system_supports_sve() && test_thread_flag(TIF_SVE)) {
 			if (WARN_ON(sve_get_vl() != current->thread.sve_vl)) {
 				/*
@@ -254,6 +255,10 @@ void fpsimd_save(void)
 
 			sve_save_state(sve_pffr(&current->thread), &st->fpsr);
 		} else
+			/*
+			 * 把浮点寄存器保存到当前进程的进程描述符的成员
+			 * thread.fpsimd_state 中。定义在 arch/arm64/kernel/entry-fpsimd.S
+			 */
 			fpsimd_save_state(st);
 	}
 }
@@ -862,6 +867,18 @@ asmlinkage void do_fpsimd_exc(unsigned int esr, struct pt_regs *regs)
 		       current);
 }
 
+/*
+ * ARM64 处理器支持浮点运算，浮点运算和单指令多数据(Single Instruction
+ * Multiple Data ， SIMD)功能共用 32 个 128 位寄存器，这些寄存器称为浮点寄
+ * 存器，用于向量运算时称为向量寄存器，标记为 V0~V31(V 代表 vector)，用于
+ * 标量(标量浮点数或者标量整数)运算时标记为 Q0~Q31(Q 代表 Quadword ，即 4
+ * 个字，一个字是 4 字节)
+ *
+ * 因为不是所有处理器都支持浮点运算，所以内核不允许使用浮点数，只有用户空
+ * 间可以使用浮点数。利用这个特性，处理器从进程切换到内核线程时不需要切换
+ * 浮点寄存器。如果处理器从进程 P 切换到内核线程，然后从内核线程切换到进程
+ * P ，那么两次进程切换都不需要切换浮点寄存器。
+ */
 void fpsimd_thread_switch(struct task_struct *next)
 {
 	bool wrong_task, wrong_cpu;
@@ -870,12 +887,22 @@ void fpsimd_thread_switch(struct task_struct *next)
 		return;
 
 	/* Save unsaved fpsimd state, if any: */
+	/* 切换出去的进程把浮点寄存器的值保存在进程描述符的成员 thread.fpsimd_state 中 */
 	fpsimd_save();
 
 	/*
 	 * Fix up TIF_FOREIGN_FPSTATE to correctly describe next's
 	 * state.  For kernel threads, FPSIMD registers are never loaded
 	 * and wrong_task and wrong_cpu will always be true.
+	 */
+	/*
+	 * 如果当前处理器的浮点状态是下一个进程的浮点状态，那么清除下一个进程的
+	 * 标志位 TIF_FOREIGN_FPSTATE ，指示当前处理器的浮点状态是下一个进程的浮
+	 * 点状态；否则，设置下一个进程的标志位 TIF_FOREIGN_FPSTATE ，指示当前处
+	 * 理器的浮点状态不是下一个进程的。当进程准备返回用户模式的时候，在函数
+	 * do_notify_resume 中，发现进程设置了标志位 TIF_FOREIGN_FPSTATE ，那么
+	 * 调用函数 fpsimd_restore_current_state 从进程描述符的成员
+	 * thread.fpsimd_state 恢复浮点寄存器，并清除标志位 TIF_FOREIGN_FPSTATE
 	 */
 	wrong_task = __this_cpu_read(fpsimd_last_state.st) !=
 					&next->thread.uw.fpsimd_state;

@@ -25,10 +25,12 @@
 /* DEBUG: Perform (expensive) checks on alloc/free */
 #define SLAB_CONSISTENCY_CHECKS	((slab_flags_t __force)0x00000100U)
 /* DEBUG: Red zone objs in a cache */
+/* 检查是否溢出，实现调度功能 */
 #define SLAB_RED_ZONE		((slab_flags_t __force)0x00000400U)
 /* DEBUG: Poison objects */
 #define SLAB_POISON		((slab_flags_t __force)0x00000800U)
 /* Align objs on cache lines */
+/* 一级缓存对齐 */
 #define SLAB_HWCACHE_ALIGN	((slab_flags_t __force)0x00002000U)
 /* Use GFP_DMA memory */
 #define SLAB_CACHE_DMA		((slab_flags_t __force)0x00004000U)
@@ -137,6 +139,7 @@ bool slab_is_available(void);
 
 extern bool usercopy_fallback;
 
+/* 创建 slab */
 struct kmem_cache *kmem_cache_create(const char *name, unsigned int size,
 			unsigned int align, slab_flags_t flags,
 			void (*ctor)(void *));
@@ -340,6 +343,7 @@ static __always_inline enum kmalloc_cache_type kmalloc_type(gfp_t flags)
  * 2 = 129 .. 192 bytes
  * n = 2^(n-1)+1 .. 2^n
  */
+/* 根据 size 查找使用的是哪个 slab 缓冲区 */
 static __always_inline unsigned int kmalloc_index(size_t size)
 {
 	if (!size)
@@ -384,6 +388,7 @@ static __always_inline unsigned int kmalloc_index(size_t size)
 #endif /* !CONFIG_SLOB */
 
 void *__kmalloc(size_t size, gfp_t flags) __assume_kmalloc_alignment __malloc;
+/* 分配 slab 对象 */
 void *kmem_cache_alloc(struct kmem_cache *, gfp_t flags) __assume_slab_alignment __malloc;
 void kmem_cache_free(struct kmem_cache *, void *);
 

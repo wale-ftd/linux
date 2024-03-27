@@ -196,7 +196,13 @@ static inline void atomic_sub(int i, atomic_t *v)
 	atomic_sub_return(i, v);
 }
 
+/* 原子地把 v 的值设置到 ptr->counter 中，并返回 ptr->counter 的原值 */
 #define atomic_xchg(ptr, v)		(xchg(&(ptr)->counter, (v)))
+/*
+ * 原子地比较 v->counter 是否与 old 的值相等，若相等，则把 new 的值设置到
+ * v->counter 的值中，返回 old 的值(即 v->counter 原值)；若不相等，返回 v->counter
+ * 原值
+ */
 #define atomic_cmpxchg(v, old, new)	(cmpxchg(&((v)->counter), (old), (new)))
 
 #endif /* __ASM_GENERIC_ATOMIC_H */

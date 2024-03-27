@@ -99,6 +99,7 @@ enum irq_domain_bus_token {
  * whatever internal data structures management is required. It also needs
  * to setup the irq_desc when returning from map().
  */
+/* 如 gic_irq_domain_hierarchy_ops */
 struct irq_domain_ops {
 	int (*match)(struct irq_domain *d, struct device_node *node,
 		     enum irq_domain_bus_token bus_token);
@@ -111,12 +112,14 @@ struct irq_domain_ops {
 		     unsigned long *out_hwirq, unsigned int *out_type);
 #ifdef	CONFIG_IRQ_DOMAIN_HIERARCHY
 	/* extended V2 interfaces to support hierarchy irq_domains */
+	/* 由 irq_domain_alloc_irqs()调用，用于设置 irq_desc */
 	int (*alloc)(struct irq_domain *d, unsigned int virq,
 		     unsigned int nr_irqs, void *arg);
 	void (*free)(struct irq_domain *d, unsigned int virq,
 		     unsigned int nr_irqs);
 	int (*activate)(struct irq_domain *d, struct irq_data *irqd, bool reserve);
 	void (*deactivate)(struct irq_domain *d, struct irq_data *irq_data);
+	/* 由 irq_domain_translate()调用，用于解析设备树中的中断相关信息，如 hwirq, flags */
 	int (*translate)(struct irq_domain *d, struct irq_fwspec *fwspec,
 			 unsigned long *out_hwirq, unsigned int *out_type);
 #endif

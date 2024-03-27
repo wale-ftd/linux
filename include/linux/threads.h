@@ -17,6 +17,7 @@
 #define CONFIG_NR_CPUS	1
 #endif
 
+/* CONFIG_NR_CPUS = 256 */
 /* Places which use this should consider cpumask_var_t. */
 #define NR_CPUS		CONFIG_NR_CPUS
 

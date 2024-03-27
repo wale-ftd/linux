@@ -17,6 +17,17 @@
  * separate allocations in the kmem_cache structure of SLAB and
  * SLUB is no longer needed.
  */
+/*
+ * slob 分配器最大的特点就是简洁，代码只有 600 多行，特别适合小内存的嵌入式设备。
+ *
+ * 所有内存缓存共享 slab ，所有对象长度小于 256 字节的内存缓存共享小对象 slab 链
+ * 表中的 slab ，所有对象长度小于 1024 字节的内存缓存共享中等对象 slab 链表中的
+ * slab，所有对象长度小于 1 页的内存缓存共享大对象 slab 链表中的 slab 。对象长度
+ * 大于或等于 1 页的内存缓存，直接从页分配器分配页，不需要经过 SLOB 分配器。
+ *
+ * SLOB 分配器的分配粒度是单元，也就是说，分配长度必须是单元的整数倍，单元是数据
+ * 类型 slobidx_t 的长度，通常是 2 字节。
+ */
 struct kmem_cache {
 	unsigned int object_size;/* The original size of the object */
 	unsigned int size;	/* The aligned/padded/added on size  */
@@ -455,22 +466,67 @@ struct kmem_cache_node {
 	spinlock_t list_lock;
 
 #ifdef CONFIG_SLAB
+	/*
+	 * 3 个链表的元素是指向一个 slab 的第一个 page 。因为一个 slab 是可以由 n 个
+	 * 连续的 page 组成。
+	 */
 	struct list_head slabs_partial;	/* partial list first, better asm code */
 	struct list_head slabs_full;
+	/*
+	 * 对于所有对象空闲的 slab ，没有立即释放，而是放在空闲 slab 链表中。只有内
+	 * 存节点上空闲对象的数量超过限制，才开始回收空闲 slab ， 直到空闲对象的数量
+	 * 小于或等于限制。
+	 *
+	 * SLAB 分配器定期回收对象和空闲 slab ，实现方法是在每个处理器上向全局工作队
+	 * 列添加 1 个延迟工作项，工作项的处理函数是 cache_reap
+	 */
 	struct list_head slabs_free;
 	unsigned long total_slabs;	/* length of all slab lists */
 	unsigned long free_slabs;	/* length of free slab list only */
+	/* 上面 3 个链表中空闲对象的总和 */
 	unsigned long free_objects;
+	/* 表示所有 slab 上容许空闲对象的最大数目 */
 	unsigned int free_limit;
+	/*
+	 * 是下一种颜色，初始值是 0 。
+	 * 在内存节点 n 上创建新的 slab ，计算 slab 的颜色偏移的方法如下：
+	 *   1.把 kmem_cache.node[n]->colour_next 加 1 ，如果大于或等于着色范围，那
+	 *     么把值设置为 0
+	 *   2.slab 的颜色偏移 = kmem_cache.node[n]->colour_next * kmem_cache.colour_off
+	 * slab 对应的 page 结构体的成员 s_mem 存放第一个对象的地址，等于(slab 的起
+	 * 始地址 + slab 的颜色偏移)
+	 */
 	unsigned int colour_next;	/* Per-node cache coloring */
+	/*
+	 * 下面两个成员用来分阶段释放从其他节点借用的对象，先释放到远程节点数组缓存，
+	 * 然后转移到共享数组缓存，最后释放到远程节点的 slab 。
+	 * 假设处理器 0 属于内存节点 0 ，处理器 1 属于内存节点 1 。处理器 0 申请分配
+	 * 对象的时候，首先从节点 0 分配对象，如果分配失败，从节点 1 借用对象。
+	 * 处理器 0 释放从节点 1 借用的对象时，需要把对象放到节点 0 的
+	 * kmem_cache_node 实例中与节点 1 对应的远程节点缓存数组中，先看是不是满了，
+	 * 如果是满的，那么必须先清空(把对象转移到节点 1 的共享数组缓存中，如果节点
+	 * 1 的共享数组缓存满了，那么把剩下的对象直接释放到 slab)
+	 *
+	 * 分配和释放本地内存节点的对象时，也会使用共享数组缓存。
+	 *   1.申请分配对象时，如果当前处理器的数组缓存是空的，共享数组缓存里面的对
+	 *     象可以用来重填。
+	 *   2.释放对象时，如果当前处理器的数组缓存是满的，并且共享数组缓存有空闲空
+	 *     间，那么可以转移一部分对象到共享数组缓存，不需要把对象批量归还给 slab ，
+	 *     然后把正在释放的对象添加到当前处理器的数组缓存中。
+	 */
+	/* 当前内存节点中 CPU 之间共享对象缓冲池 */
 	struct array_cache *shared;	/* shared per node */
+	/* 指向远程节点数组缓存，每个节点一个远程节点数组缓存 */
 	struct alien_cache **alien;	/* on other nodes */
 	unsigned long next_reap;	/* updated without locking */
+	/* 表示从 slabs_free 链表里获取过 slab */
 	int free_touched;		/* updated without locking */
 #endif
 
 #ifdef CONFIG_SLUB
+	/* 部分空闲 slab 的数量 */
 	unsigned long nr_partial;
+	/* 用于把部分空闲的 slab 链接起来 */
 	struct list_head partial;
 #ifdef CONFIG_SLUB_DEBUG
 	atomic_long_t nr_slabs;

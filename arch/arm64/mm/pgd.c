@@ -28,6 +28,7 @@
 
 static struct kmem_cache *pgd_cache __ro_after_init;
 
+/* 分配 PGD 页表 */
 pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	if (PGD_SIZE == PAGE_SIZE)
@@ -44,6 +45,7 @@ void pgd_free(struct mm_struct *mm, pgd_t *pgd)
 		kmem_cache_free(pgd_cache, pgd);
 }
 
+/* start_kernel -> mm_init -> pgtable_init -> pgtable_cache_init -> pgd_cache_init */
 void __init pgd_cache_init(void)
 {
 	if (PGD_SIZE == PAGE_SIZE)

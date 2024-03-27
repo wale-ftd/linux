@@ -1585,6 +1585,10 @@ static int shmem_replace_page(struct page **pagep, gfp_t gfp,
  * fault_mm and fault_type are only supplied by shmem_fault:
  * otherwise they are NULL.
  */
+/*
+ * 按照 page cache -> swap cache -> swap device 查找 page 。如果没有找到 page ，
+ * 对于读，不会分配新页面，但对于写，会分配新页面
+ */
 static int shmem_getpage_gfp(struct inode *inode, pgoff_t index,
 	struct page **pagep, enum sgp_type sgp, gfp_t gfp,
 	struct vm_area_struct *vma, struct vm_fault *vmf,
@@ -1609,8 +1613,10 @@ static int shmem_getpage_gfp(struct inode *inode, pgoff_t index,
 		sgp = SGP_CACHE;
 repeat:
 	swap.val = 0;
+	/* 先从 page cache 中查看 */
 	page = find_lock_entry(mapping, index);
 	if (xa_is_value(page)) {
+		/* 再从 swap cache 或 swap device 中查看 */
 		swap = radix_to_swp_entry(page);
 		page = NULL;
 	}
@@ -2414,6 +2420,7 @@ shmem_write_end(struct file *file, struct address_space *mapping,
 		}
 		SetPageUptodate(head);
 	}
+	/* 设置页面为脏页 */
 	set_page_dirty(page);
 	unlock_page(page);
 	put_page(page);
@@ -2459,6 +2466,11 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 				break;
 		}
 
+		/*
+		 * 如果查找不到页面，则不会分配新的页面，只会往用户空间缓冲区拷贝 0(这
+		 * 有点类似匿名页的第一次读，一般会映射到 zero page)，这种情况也说明了
+		 * 相关文件偏移的页面从来没有被人写访问过。
+		 */
 		error = shmem_getpage(inode, index, &page, sgp);
 		if (error) {
 			if (error == -EINVAL)
@@ -2488,6 +2500,7 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		}
 		nr -= offset;
 
+		/* 复制数据到用户空间 */
 		if (page) {
 			/*
 			 * If users can be writing to this page using arbitrary
@@ -2526,7 +2539,9 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		cond_resched();
 	}
 
+	/* 更新文件读写位置 */
 	*ppos = ((loff_t) index << PAGE_SHIFT) + offset;
+	/* 标记文件已访问过 */
 	file_accessed(file);
 	return retval ? retval : error;
 }
@@ -3602,7 +3617,9 @@ static const struct file_operations shmem_file_operations = {
 	.get_unmapped_area = shmem_get_unmapped_area,
 #ifdef CONFIG_TMPFS
 	.llseek		= shmem_file_llseek,
+	/* tmpfs 文件读 */
 	.read_iter	= shmem_file_read_iter,
+	/* tmpfs 文件写 */
 	.write_iter	= generic_file_write_iter,
 	.fsync		= noop_fsync,
 	.splice_read	= generic_file_splice_read,

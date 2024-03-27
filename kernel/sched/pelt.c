@@ -33,11 +33,17 @@
  * Approximate:
  *   val * y^n,    where y^32 ~= 0.5 (~1 scheduling period)
  */
+/*
+ * 计算第 n 个周期的衰减值 val * y^n 。其中一个周期为 1024us ~= 1ms
+ * @val: n 个周期前的负载值
+ * @n: 第 n 个周期
+ */
 static u64 decay_load(u64 val, u64 n)
 {
 	unsigned int local_n;
 
 	if (unlikely(n > LOAD_AVG_PERIOD * 63))
+    /* 周期大于 32*63 = 2016 ms */
 		return 0;
 
 	/* after bounds checking we can collapse to 32-bit */
@@ -50,11 +56,14 @@ static u64 decay_load(u64 val, u64 n)
 	 *
 	 * To achieve constant time decay_load.
 	 */
+	/* 处理周期大于等于 32ms 部分 */
 	if (unlikely(local_n >= LOAD_AVG_PERIOD)) {
+    /* 如果周期处于 32 ~ 2016 ms ，第增加 32 ms 就要衰减一半，相当于右移一位 */
 		val >>= local_n / LOAD_AVG_PERIOD;
 		local_n %= LOAD_AVG_PERIOD;
 	}
 
+	/* 处理周期小于 32ms 部分 */
 	val = mul_u64_u32_shr(val, runnable_avg_yN_inv[local_n], 32);
 	return val;
 }
@@ -76,6 +85,15 @@ static u32 __accumulate_pelt_segments(u64 periods, u32 d1, u32 d3)
 	 *              inf        inf
 	 *    = 1024 ( \Sum y^n - \Sum y^n - y^0 )
 	 *              n=0        n=p
+	 */
+	/*
+	 *
+	 *         inf                 inf                     inf
+	 * 1024 ( \Sum y^n ) = 1024 ( \Sum y^(n+p) ) = 1024 ( \Sum y^n ) y^p
+	 *         n=p                 n=0                     n=0
+	 *
+	 *                   = LOAD_AVG_MAX * y^p
+	 * 详见提交: 05296e7535d67ba4926b543a09cf5d430a815cb6
 	 */
 	c2 = LOAD_AVG_MAX - decay_load(LOAD_AVG_MAX, periods) - 1024;
 
@@ -113,10 +131,14 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 	u32 contrib = (u32)delta; /* p == 0 -> delta < 1024 */
 	u64 periods;
 
+    /* EAS 引入的。用于计算 CPU 在不同频率下的计算能力 */
 	scale_freq = arch_scale_freq_capacity(cpu);
+    /* 用于计算不同的 CPU 的额定计算能力，因为大/小核的 CPU 是不一样的 */
 	scale_cpu = arch_scale_cpu_capacity(NULL, cpu);
 
+    /* 加上上一次更新时不能凑成一个周期(1024us)的多余时间 */
 	delta += sa->period_contrib;
+    /* 计算完整的周期数 */
 	periods = delta / 1024; /* A period is 1024us (~1ms) */
 
 	/*
@@ -131,7 +153,9 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 		/*
 		 * Step 2
 		 */
+		/* 计算这次更新时不能凑成一个周期(1024us)的多余时间 */
 		delta %= 1024;
+		/* 计算自从上次计算负载总和到现在这段时间的负载增量 */
 		contrib = __accumulate_pelt_segments(periods,
 				1024 - sa->period_contrib, delta);
 	}
@@ -143,6 +167,7 @@ accumulate_sum(u64 delta, int cpu, struct sched_avg *sa,
 	if (runnable)
 		sa->runnable_load_sum += runnable * contrib;
 	if (running)
+        /* 为了计算实际算力，还需要乘以 scale_cpu */
 		sa->util_sum += contrib * scale_cpu;
 
 	return periods;
@@ -221,6 +246,11 @@ ___update_load_sum(u64 now, int cpu, struct sched_avg *sa,
 	 * Step 1: accumulate *_sum since last_update_time. If we haven't
 	 * crossed period boundaries, finish.
 	 */
+	/*
+	 * 计算负载总和。如果时间间隔 delta 至少包含一个完整周期 1024us ，那么
+	 * 函数 accumulate_sum 返回 true ，否则返回 false 。
+	 * Step 2 见 ___update_load_avg()
+	 */
 	if (!accumulate_sum(delta, cpu, sa, load, runnable, running))
 		return 0;
 
@@ -230,6 +260,11 @@ ___update_load_sum(u64 now, int cpu, struct sched_avg *sa,
 static __always_inline void
 ___update_load_avg(struct sched_avg *sa, unsigned long load, unsigned long runnable)
 {
+	/*
+	 * 为什么要减去 (1024 - sa->period_contrib) 呢？因为它是上一次采样的时候
+	 * 不满一个周期残留下来的，这段时间不能不考虑，而 LOAD_AVG_MAX 是从一个
+	 * 完整的周期开始计算的，所以要把这部分残余减去。
+	 */
 	u32 divider = LOAD_AVG_MAX - 1024 + sa->period_contrib;
 
 	/*

@@ -439,6 +439,11 @@ static void update_curr_idle(struct rq *rq)
 /*
  * Simple, special scheduling class for the per-CPU idle tasks:
  */
+/*
+ * 属于这个类的进程优先级最低，当就绪队列中没有其他进程时进入 idle 调度类，它
+ * 会让 CPU 进入低功耗模式
+ */
+
 const struct sched_class idle_sched_class = {
 	/* .next is NULL */
 	/* no enqueue/yield_task for idle tasks */

@@ -75,6 +75,7 @@ _head:
 	/*
 	 * DO NOT MODIFY. Image header expected by Linux boot-loaders.
 	 */
+/* 有定义 */
 #ifdef CONFIG_EFI
 	/*
 	 * This add instruction has no meaningful effect except that
@@ -102,6 +103,7 @@ pe_header:
 	.long	0				// reserved
 #endif
 
+    /* 说明汇编入口代码 stext 链接到 .init.text 段 */
 	__INIT
 
 	/*
@@ -115,11 +117,15 @@ pe_header:
 	 *  x19/x20    __primary_switch()         callee preserved temp registers
 	 */
 ENTRY(stext)
+    /* 保存启动参数到 boot_args[]数组 */
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
+	/* 加载 _text 的运行地址 0x40008000 ，所以 __PHYS_OFFSET = 0x40000000 */
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
+    /* 设置 __boot_cpu_mode[]变量 */
 	bl	set_cpu_boot_mode_flag
+	/* 创建恒等映射页表以及内核映像映射页表 */
 	bl	__create_page_tables
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
@@ -127,7 +133,9 @@ ENTRY(stext)
 	 * On return, the CPU will be ready for the MMU to be turned on and
 	 * the TCR will have been set.
 	 */
+	/* 为打开 MMU 做一些与处理器相关的初始化 */
 	bl	__cpu_setup			// initialise processor
+	/* 启动 MMU 并跳转到 start_kernel() */
 	b	__primary_switch
 ENDPROC(stext)
 
@@ -135,16 +143,32 @@ ENDPROC(stext)
  * Preserve the arguments passed by the bootloader in x0 .. x3
  */
 preserve_boot_args:
+    /* 把设备树的物理地址存到 x21 中，因为 x0 后面要用来传递参数 */
 	mov	x21, x0				// x21=FDT
 
+    /*
+     * adr_l 是一个宏，用来把 boot_args 的运行地址加载到 x0 中，其定义在
+     * arch/arm64/include/asm/assembler.h 中
+     */
 	adr_l	x0, boot_args			// record the contents of
+	/* 把 x21, x1, x2, x3 按顺序存入 boot_args 数组里 */
 	stp	x21, x1, [x0]			// x0 .. x3 at kernel entry
 	stp	x2, x3, [x0, #16]
 
+    /*
+     * 在全系统高速缓存范围内做一次内存屏障，保证刚才的 stp 指令运行顺序正确，
+     * 也就是保证在后面 __inval_dcache_area 函数在运行 dc ivac 指令前完成 stp
+     * 指令的执行
+     */
 	dmb	sy				// needed before dc ivac with
 						// MMU off
 
+    /* x0, x1 是要传给 __inval_dcache_area 的参数，即 boot_args 的地址和长度 */
 	mov	x1, #0x20			// 4 x 8 bytes
+	/*
+	 * 使 boot_args[]数组对应的高速缓存失效并清除这些缓存，定义在
+	 * arch\arm64\mm\cache.S
+	 */
 	b	__inval_dcache_area		// tail call
 ENDPROC(preserve_boot_args)
 
@@ -187,6 +211,7 @@ ENDPROC(preserve_boot_args)
  * Corrupts:	index, tmp1
  * Returns:	rtbl
  */
+    /* 设置页表项的内容 */
 	.macro populate_entries, tbl, rtbl, index, eindex, flags, inc, tmp1
 .Lpe\@:	phys_to_pte \tmp1, \rtbl
 	orr	\tmp1, \tmp1, \flags	// tmp1 = table entry
@@ -215,6 +240,7 @@ ENDPROC(preserve_boot_args)
  * Preserves:	vstart, vend, shift, ptrs
  * Returns:	istart, iend, count
  */
+    /* 根据虚拟地址来计算虚拟地址 vstart 和 vend 在各自页表中对应的索引值 */
 	.macro compute_indices, vstart, vend, shift, ptrs, istart, iend, count
 	lsr	\iend, \vend, \shift
 	mov	\istart, \ptrs
@@ -284,7 +310,32 @@ ENDPROC(preserve_boot_args)
  *   - first few MB of the kernel linear mapping to jump to once the MMU has
  *     been enabled
  */
+/*
+ * 创建两个映射，一个是 .idmap.text 段的小范围恒等映射，另外一个是内核映像的
+ * 映射。
+ *
+ * 为什么要创建恒等映射？
+ * 答：为了降低启动代码的复杂性，约定进入 Linux 内核入口时 MMU 是关闭的。关闭
+ * 了 MMU ，意味着不能利用高速缓存的性能。因此，在初始化的某个阶段需要把 MMU
+ * 打开并且使能数据高速缓存，以获得更高的性能。但是，打开 MMU 需要很小心，否
+ * 则会发生意想不到的问题，因为现代处理器大多是多级流水架构，处理器会提前预取
+ * 多条指令到流水线中。当打开 MMU 时，处理器已经提前预取了多条指令，并且这些
+ * 指令是以物理地址来进行预取的。打开 MMU 的指令运行完之后，处理器的 MMU 功能
+ * 生效，于是之前提前预取的指令会以虚拟地址来访问，到 MMU 中查找对应的物理地
+ * 地，这会出问题的。为了保证处理器在开启 MMU 前后可以连续取指令，在打开 MMU
+ * 时，先创建一个小范围的虚拟地址和物理地址相等的映射(即恒等映射)。
+ *
+ * 为什么这里要创建两个页表？而不是一个页表呢？
+ * 答：因为 ARM64 有两个页表基地址寄存器， TTBR0 和 TTBR1 ，使用哪个根据
+ * bit[63]来决定。恒等映射映射到低 256TB 大小的地址空间，使用 TTBR0 ；内核
+ * 映像映射到高地址空间(高 256TB 大小的空间，即内核空间)，使用 TTBR1 。因此，
+ * 需要创建两个页表，一个给 TTBR0 使用，一个给 TTBR1 使用。
+ *
+ * 为什么恒等映射映射到低 256TB 大小的地址空间？
+ * 答：因为 ARM64 的 SoC 的物理内存的起始地址是从 0 地址开始的。
+ */
 __create_page_tables:
+    /* lr 的保存 __cpu_setup 的地址 */
 	mov	x28, lr
 
 	/*
@@ -296,6 +347,10 @@ __create_page_tables:
 	adrp	x0, init_pg_dir
 	adrp	x1, init_pg_end
 	sub	x1, x1, x0
+	/*
+	 * 使 init_pg_dir 对应的高速缓存无效。稍后会建立内核空间的页表映射，因此，
+	 * 这里先清空 init_pg_dir 对应的高速缓存
+	 */
 	bl	__inval_dcache_area
 
 	/*
@@ -315,6 +370,10 @@ __create_page_tables:
 
 	/*
 	 * Create the identity mapping.
+	 */
+	/*
+	 * 创建恒等映射，把 .idmap.text 段的虚拟地址映射到了相同的物理地址上，
+	 * 这个映射的页表在 idmap_pg_dir 中
 	 */
 	adrp	x0, idmap_pg_dir
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
@@ -384,6 +443,7 @@ __create_page_tables:
 	mov	x5, x3				// __pa(__idmap_text_start)
 	adr_l	x6, __idmap_text_end		// __pa(__idmap_text_end)
 
+    /* 建立映射页表 */
 	map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
 
 	/*
@@ -405,6 +465,11 @@ __create_page_tables:
 	 * accesses (MMU disabled), invalidate the idmap and swapper page
 	 * tables again to remove any speculatively loaded cache lines.
 	 */
+    /*
+     * 使恒等映射页表 idmap_pg_dir 和内核态页表 init_pg_dir 对应的高速缓存
+     * 无效。虽然目前还没使能 MMU ，但是数据可能被提前预取到高速缓存中，因
+     * 此要清除对应的高速缓存并使它无效
+     */
 	adrp	x0, idmap_pg_dir
 	adrp	x1, init_pg_end
 	sub	x1, x1, x0
@@ -436,7 +501,23 @@ __primary_switched:
 	str_l	x21, __fdt_pointer, x5		// Save FDT pointer
 
 	ldr_l	x4, kimage_vaddr		// Save the offset between
+	/* == 0xffff000010000000 - 0x40000000 = 0xfffeffffd0000000 */
 	sub	x4, x4, x0			// the kernel virtual and
+	/*
+	 * str_l 是一个宏定义，位于 arch/arm64/include/asm/assembler.h
+	 * 展开宏为：
+	 *   // 加载 按 4KB 对齐的 kimage_voffset 地址(其实就是 kimage_voffset
+	 *      地址清除了低 12 位)到 x5
+	 *   adrp x5, kimage_voffset
+	 *   // 把 x4 的值写入 x5 + kimage_voffset 的低 12 位地址(其实就是
+	 *      相当于 kimage_voffset = x4)
+	 *   str x4, [x5, :lo12:kimage_voffset]
+	 * 如果当前 PC 与 kimage_voffset 偏移不超过 1MB ，也可以用下面语句：
+	 *   adr x5, kimage_voffset
+	 *   str x4, [x5]
+	 * 但在这里，单步调试(或者查看 System.map)来看， PC 与 kimage_voffset 偏
+	 * 移大于 1MB
+	 */
 	str_l	x4, kimage_voffset, x5		// physical mappings
 
 	// Clear BSS
@@ -456,6 +537,10 @@ __primary_switched:
 	mov	x0, x21				// pass FDT address in x0
 	bl	kaslr_early_init		// parse FDT for KASLR options
 	cbz	x0, 0f				// KASLR disabled? just proceed
+	/*
+	 * 将 bootloader 传进来的 FDT 地址与 kaslr_early_init()计算出来的 offset
+	 * 得到 KASLR offset 。 KASLR offset 的随机性是因为 FDT 地址是随机的。
+	 */
 	orr	x23, x23, x0			// record KASLR offset
 	ldp	x29, x30, [sp], #16		// we must enable KASLR, return
 	ret					// to __primary_switch()
@@ -473,6 +558,10 @@ ENDPROC(__primary_switched)
  */
 	.section ".idmap.text","awx"
 
+/*
+ * == 0xffff000010080000 - 0x00080000 = 0xffff000010000000 。
+ * 其中 TEXT_OFFSET = 0x00080000 ，定义在 arch/arm64/Makefile 。
+ */
 ENTRY(kimage_vaddr)
 	.quad		_text - TEXT_OFFSET
 EXPORT_SYMBOL(kimage_vaddr)
@@ -485,16 +574,24 @@ EXPORT_SYMBOL(kimage_vaddr)
  * booted in EL1 or EL2 respectively.
  */
 ENTRY(el2_setup)
+    /* 设置 SP 寄存器，使用 SP_EL1 */
 	msr	SPsel, #1			// We want to use SP_EL{1,2}
+	/* 获取当前异常等级 */
 	mrs	x0, CurrentEL
 	cmp	x0, #CurrentEL_EL2
 	b.eq	1f
+	/* 当前处于 EL1 异常等级 */
 	mov_q	x0, (SCTLR_EL1_RES1 | ENDIAN_SET_EL1)
 	msr	sctlr_el1, x0
 	mov	w0, #BOOT_CPU_MODE_EL1		// This cpu booted in EL1
+	/*
+	 * 前面修改了系统寄存器，改变了系统的大小端模式，因此需要一条 isb 指令，
+	 * 确保该指令前面所有的指令都运行完成
+	 */
 	isb
 	ret
 
+/* 当前处于 EL2 异常等级 */
 1:	mov_q	x0, (SCTLR_EL2_RES1 | ENDIAN_SET_EL2)
 	msr	sctlr_el2, x0
 
@@ -653,11 +750,14 @@ ENDPROC(el2_setup)
  */
 set_cpu_boot_mode_flag:
 	adr_l	x1, __boot_cpu_mode
+    /* 在 el2_setup 将 w0 设置为 BOOT_CPU_MODE_EL1 */
 	cmp	w0, #BOOT_CPU_MODE_EL2
 	b.ne	1f
 	add	x1, x1, #4
 1:	str	w0, [x1]			// This CPU has booted in EL1
+    /* 保证 str 指令比 dmb 指令后面的加载-存储指令先执行 */
 	dmb	sy
+	/* 使 __boot_cpu_mode[]变量对应的高速缓存无效 */
 	dc	ivac, x1			// Invalidate potentially stale cache line
 	ret
 ENDPROC(set_cpu_boot_mode_flag)
@@ -857,6 +957,7 @@ ENDPROC(__relocate_kernel)
 #endif
 
 __primary_switch:
+/* 有定义 */
 #ifdef CONFIG_RANDOMIZE_BASE
 	mov	x19, x0				// preserve new SCTLR_EL1 value
 	mrs	x20, sctlr_el1			// preserve old SCTLR_EL1 value
@@ -864,11 +965,28 @@ __primary_switch:
 
 	adrp	x1, init_pg_dir
 	bl	__enable_mmu
+/* 有定义 */
 #ifdef CONFIG_RELOCATABLE
 	bl	__relocate_kernel
 #ifdef CONFIG_RANDOMIZE_BASE
+    /* 把 __primary_switched 函数的链接地址加载到 x8 寄存器 */
 	ldr	x8, =__primary_switched
+	/*
+	 * 加载 __PHYS_OFFSET 值(即内存的起始地址)到 x0 寄存器中。
+	 * 前面已经打开了 MMU (bl	__enable_mmu)，这里怎么获取内存的起始地址
+	 * __PHYS_OFFSET 的呢？
+     * 首先 __PHYS_OFFSET 这个宏表示的是(_text – TEXT_OFFSET)，就是代码段
+     * 起始地址 – 0x8000 = 0x40080000 - 0x80000 = 0x40000000 。但通过
+     * System.map 查询 _text 的值是 0xffff000010080000，这是为什么呢？因为
+     * 这时的运行地址不等于链接地址，等到执行下面的 blr	x8 指令(跳转到链接
+     * 地址上运行)，才实现地址重定位。所以这里要使用 adrp 指令(获取以 PC 地
+     * 址为基准的地址)
+	 */
 	adrp	x0, __PHYS_OFFSET
+	/*
+	 * 在此之前，运行地址不等于链接地址。跳转到 __primary_switched 函数的链
+	 * 接地址执行，实现重定位。此后，运行地址等于链接地址。
+	 */
 	blr	x8
 
 	/*

@@ -531,6 +531,7 @@ static struct queue_sysfs_entry queue_requests_entry = {
 	.store = queue_requests_store,
 };
 
+/* cat `find /sys/devices/ -name read_ahead_kb` */
 static struct queue_sysfs_entry queue_ra_entry = {
 	.attr = {.name = "read_ahead_kb", .mode = 0644 },
 	.show = queue_ra_show,

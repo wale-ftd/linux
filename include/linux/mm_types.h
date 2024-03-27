@@ -67,7 +67,19 @@ struct hmm;
 #define _struct_page_alignment
 #endif
 
+/*
+ * 1. 物理地址 <-> PFN 用 __phys_to_pfn()/__pfn_to_phys()
+ * 2. PFN <-> page 用 __pfn_to_page()/__page_to_pfn()
+ * 3. 页表项的值(pgd_t/pud_t/pmd_t/pte_t) -> page 用 pgd_page()/pud_page()/
+ *                                                   pmd_page()/pte_page()
+ */
 struct page {
+	/*
+	 * 布局见 SECTIONS_PGOFF 上面的注释。
+	 *
+	 * 用于 slob 时，设置标志位 PG_slab ，表示页属于 SLOB 分配器；设置标志位
+	 * PG_slob_free ，表示 slab 在 slab 链表中。
+	 */
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
 	/*
@@ -83,9 +95,27 @@ struct page {
 			 * zone_lru_lock.  Sometimes used as a generic list
 			 * by the page owner.
 			 */
+			/*
+			 * 用于 slab 时，作为链表节点加入其中一条 slab 链表
+			 * 用于 slub 时，作为链表节点加入部分空闲 slab 链表
+			 * 用于 slob 时，作为链表节点加入 slab 链表
+			 */
 			struct list_head lru;
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
+            /*
+             * 指向 struct address_space 或者 struct anon_vma 。
+             * 常用 page_mapping()/page_rmapping()/PageAnon()/__PageMovable()/
+             * PageKsm()
+             */
 			struct address_space *mapping;
+            /*
+             * __page_set_anon_rmap()/shmem_add_to_page_cache()/__add_to_page_cache_locked()
+             * 如果是文件映射，表示从文件开始的第 index 个文件面
+             *
+             * 对于 PCP 中的页，存放 migratetype 。如果释放的页面的 migratetype
+             * 大于 MIGRATE_PCPTYPES ，会先入 MIGRATE_MOVABLE 中，但其真实的迁移
+             * 类型保存在 index 中，见 free_unref_page_commit()
+             */
 			pgoff_t index;		/* Our offset within mapping. */
 			/**
 			 * @private: Mapping-private opaque data.
@@ -93,13 +123,27 @@ struct page {
 			 * Used for swp_entry_t if PageSwapCache.
 			 * Indicates order in the buddy system if PageBuddy.
 			 */
+			/*
+			 * 页面空闲时，存放其在伙伴系统中的 order 值
+			 * 用于 zsmalloc 时，存放 struct zspage * ，见 create_page_chain()
+			 * 用于 swap cache 时，存放 swp_entry_t ，见 add_to_swap_cache()
+			 * 用于 buffer_head 时，存放 buffer_head * ，见 attach_page_buffers()
+			 */
 			unsigned long private;
 		};
 		struct {	/* slab, slob and slub */
 			union {
 				struct list_head slab_list;	/* uses lru */
 				struct {	/* Partial pages */
+					/*
+					 * 用于 slub 时，指向下一个 slab 对应的 page 实例
+					 */
 					struct page *next;
+					/*
+					 * 用于 slub 时，第一个 slab 对应的 page 实例的成员 pages 存
+					 * 放链表中 slab 的数量，成员 pobjects 存放链表中空闲对象的
+					 * 数量；后面的 slab 没有使用这两个成员
+					 */
 #ifdef CONFIG_64BIT
 					int pages;	/* Nr of pages left */
 					int pobjects;	/* Approximate count */
@@ -109,25 +153,63 @@ struct page {
 #endif
 				};
 			};
+			/* 该 page 所属的 slab 。 free slab 对象的时候要用到 */
 			struct kmem_cache *slab_cache; /* not slob */
 			/* Double-word boundary */
+			/*
+			 * 用于 slab 时，指向对象管理区，是一个 unsigned short 类型的数组，
+			 * 数组中元素存放是的对象索引。需要和 active 配合使用。
+			 *
+			 * 如果打开了 SLAB 空闲链表随机化的配置宏
+			 * CONFIG_SLAB_FREELIST_RANDOM，数组中第 n 个元素存放的对象索引是随
+			 * 机的
+			 *
+			 * 用于 slub/slob 时，指向第一个空闲对象
+			 */
 			void *freelist;		/* first free object */
 			union {
+				/* 存放 slab 第一个对象的地址 */
 				void *s_mem;	/* slab: first object */
 				unsigned long counters;		/* SLUB */
 				struct {			/* SLUB */
+					/* 表示已分配对象的数量 */
 					unsigned inuse:16;
+					/* 表示对象数量 */
 					unsigned objects:15;
+					/*
+					 * 表示 slab 是否被冻结在每处理器 slab 缓存中。如果 slab 在
+					 * 每处理器 slab 缓存中，它处于冻结状态；如果 slab 在内存节
+					 * 点的部分空闲 slab 链表中，它处于解冻状态
+					 */
 					unsigned frozen:1;
 				};
 			};
 		};
+		/*
+		 * 判断一个页是复合页的成员的方法是：页设置了标志位 PG_head(针对首页)，
+		 * 或者页的成员 compound_head 的最低位是 1(针对尾页)，见 PageCompound()
+		 */
 		struct {	/* Tail pages of compound page */
+			/*
+			 * 所有尾页的成员 compound_head 存放首页的地址，并且把最低位设置为
+			 * 1 。和成员 lru.pre 占用相同的位置
+			 */
 			unsigned long compound_head;	/* Bit zero is set */
 
 			/* First tail page only */
+			/* 以下三个成员对 page[1] 才有效 */
+			/*
+			 * 存放复合页释放函数数组的索引，如 COMPOUND_PAGE_DTOR 。和成员
+			 * lru.next 占用相同的位置
+			 */
 			unsigned char compound_dtor;
+			/* 存放复合页的阶数 n 。和成员 lru.next 占用相同的位置 */
 			unsigned char compound_order;
+			/*
+			 * 表示复合页的映射计数(即多少个虚拟页映射到这个物理页)，初始值为
+			 * -1 。这个成员和成员 mapping 组成一个联合体，占用相同的位置，其他
+			 * 尾页把成员 mapping 设置为一个有毒的地址。
+			 */
 			atomic_t compound_mapcount;
 		};
 		struct {	/* Second tail page of compound page */
@@ -165,6 +247,10 @@ struct page {
 		 * If the page can be mapped to userspace, encodes the number
 		 * of times this page is referenced by a page table.
 		 */
+		/*
+		 * 初始值为 -1 (page_mapcount_reset()) 。只有一个进程(父进程)映射
+		 * 时，为 0 。 page_mapped()
+		 */
 		atomic_t _mapcount;
 
 		/*
@@ -175,11 +261,28 @@ struct page {
 		 */
 		unsigned int page_type;
 
+		/*
+		 * 一个 slab 可能由多个连续的 page 组成，active 表示当前 slab 中，
+		 * 活跃对象(指已经被迁移到对象缓冲池的对象)的个数，也可以理解为待
+		 * 迁移到对象缓冲池的起始空闲对象的下标。如果当前 slab 中没有活跃
+		 * 对象，即全部是不活跃的空闲对象，那么这个 slab 在合适的时机会被
+		 * 销毁
+		 *
+		 * 有两重意思。
+		 * 如为 0 时，
+		 *   1.表示已分配对象的数量为 0
+		 *   2.下一次分配的对象是 page->s_mem + page->freelist[0]
+		 * 如为 3 时，
+		 *   1.表示已分配对象的数量为 3
+		 *   2.下一次分配的对象是 page->s_mem + page->freelist[3]
+		 */
 		unsigned int active;		/* SLAB */
+		/* 表示空闲单元的数量 */
 		int units;			/* SLOB */
 	};
 
 	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
+    /* 初始值为 0 。建议使用 page_count()/get_page()/put_page()操作。 */
 	atomic_t _refcount;
 
 #ifdef CONFIG_MEMCG
@@ -209,6 +312,7 @@ struct page {
 /*
  * Used for sizing the vmemmap region on some architectures
  */
+/* 64B */
 #define STRUCT_PAGE_MAX_SHIFT	(order_base_2(sizeof(struct page)))
 
 #define PAGE_FRAG_CACHE_MAX_SIZE	__ALIGN_MASK(32768, ~PAGE_MASK)
@@ -289,12 +393,19 @@ struct vm_area_struct {
 	/* Second cache line starts here. */
 
 	struct mm_struct *vm_mm;	/* The address space we belong to. */
+    /* 在初始化 VMA 时设置此变量。在真正分配物理内存时(如 page_fault 时)设置到页表项中 */
 	pgprot_t vm_page_prot;		/* Access permissions of this VMA. */
+    /* VM_xxx ，如 VM_WRITE 。 vm_get_page_prot()将 vm_flags 转换成 page prot */
 	unsigned long vm_flags;		/* Flags, see mm.h. */
 
 	/*
 	 * For areas with an address space and backing store,
 	 * linkage into the address_space->i_mmap interval tree.
+	 */
+	/*
+	 * 为了支持查询一个文件区间被映射到哪些虚拟内存区域，把一个文件映射到的所有
+	 * 虚拟内存区域加入该文件的地址空间结构体 address_space 的成员 i_mmap 指向
+	 * 的区间树
 	 */
 	struct {
 		struct rb_node rb;
@@ -307,14 +418,31 @@ struct vm_area_struct {
 	 * can only be in the i_mmap tree.  An anonymous MAP_PRIVATE, stack
 	 * or brk vma (with NULL file) can only be in an anon_vma list.
 	 */
+	/* 链表头，元素为 avc->same_vma */
 	struct list_head anon_vma_chain; /* Serialized by mmap_sem &
 					  * page_table_lock */
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
 
 	/* Function pointers to deal with this struct. */
+    /* 如 generic_file_vm_ops/shmem_vm_ops/hugetlb_vm_ops/special_mapping_vmops */
 	const struct vm_operations_struct *vm_ops;
 
 	/* Information about our backing store: */
+    /*
+     * 对于共享匿名映射: vma->vm_pgoff = 0 ，见 do_mmap()
+     * 对于私有匿名映射:
+     *   vma->vm_pgoff = addr >> PAGE_SHIFT ，见 do_brk_flags()/do_mmap()
+     * 对于文件映射：表示文件内的偏移量。因为一个文件如果太大可能分散映射到不同的
+     *               VMA 中，所以需要 vm_pgoff 来链接
+     * 对于特殊映射:
+     *   vma->vm_pgoff = vma->vm_start >> PAGE_SHIFT ，见 insert_vm_struct()
+     *
+     * page->index - vm_pgoff 可以计算出页面在 VMA 里的偏移量，再加上 vma_start 就
+     * 可以获得页面的虚拟地址，见 __vma_address()。
+     * 对于匿名页面， __vma_address()的逆向操作是 linear_page_index()(计算 page->index)
+     *
+     * 通常使用 VM_PFNMAP ， vm_pgoff 可能指向第一个 PFN 映射，见 _vm_normal_page()
+     */
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
 	struct file * vm_file;		/* File we map to (can be NULL). */
@@ -342,16 +470,43 @@ struct core_state {
 };
 
 struct kioctx_table;
+/*
+ * ARM64 进程地址空间布局
+ *
+ * 0x0 -------------------------------------------> 0x0000ffffffffffff
+ *  | 保留区 | 代码段 | 数据段 | 堆空间 | mmap 空间 | 栈 | arg | env |
+ *  ------------------------------------------------------------------
+ *
+ * task_size   = 0x1000000000000,
+ * env_end     =  0xffffd4013fed,
+ * env_start   =  0xffffd4013fca,
+ * arg_end     =  0xffffd4013fca,
+ * arg_start   =  0xffffd4013fae,
+ * start_stack =  0xffffd4012ec0,
+ * mmap_base   =  0xffffbaa91000,
+ * brk         =  0xaaaae834c000,
+ * start_brk   =  0xaaaae81cd000,
+ * end_data    =  0xaaaad3857490,
+ * start_data  =  0xaaaad381ab80,
+ * end_code    =  0xaaaad380a1c4,
+ * start_code  =  0xaaaad36eb000,
+ */
 struct mm_struct {
 	struct {
 		struct vm_area_struct *mmap;		/* list of VMAs */
 		struct rb_root mm_rb;
 		u64 vmacache_seqnum;                   /* per-thread vmacache */
 #ifdef CONFIG_MMU
+        /*
+         * 判断虚拟内存空间是否有足够的空间，返回一段没有映射过的空间的起始地址。
+         * 在 arch_pick_mmap_layout()里设置，一般会使用具体的处理器架构的实现。
+         * arm64 是 arch_get_unmapped_area_topdown
+         */
 		unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
 				unsigned long pgoff, unsigned long flags);
 #endif
+		/* 在 arch_pick_mmap_layout()里设置，不同的虚拟内存布局，此值不一样 */
 		unsigned long mmap_base;	/* base of mmap area */
 		unsigned long mmap_legacy_base;	/* base of mmap area in bottom-up allocations */
 #ifdef CONFIG_HAVE_ARCH_COMPAT_MMAP_BASES
@@ -359,6 +514,7 @@ struct mm_struct {
 		unsigned long mmap_compat_base;
 		unsigned long mmap_compat_legacy_base;
 #endif
+        /* 进程空间大小 */
 		unsigned long task_size;	/* size of task vm space */
 		unsigned long highest_vm_end;	/* highest vma end address */
 		pgd_t * pgd;
@@ -372,6 +528,11 @@ struct mm_struct {
 		 * @mm_count (which may then free the &struct mm_struct if
 		 * @mm_count also drops to 0).
 		 */
+		/*
+		 * 记录正在使用该进程地址空间的进程数目，如果两个用户线程共享该地址空间，
+		 * 那么 mm_users 的值等于 2 。如果内核线程临时使用一个进程地址空间，
+		 * mm_users 的值不会增加，还是为 1 。
+		 */
 		atomic_t mm_users;
 
 		/**
@@ -380,6 +541,10 @@ struct mm_struct {
 		 *
 		 * Use mmgrab()/mmdrop() to modify. When this drops to 0, the
 		 * &struct mm_struct is freed.
+		 */
+		/*
+		 * 如果两个用户线程共享该地址空间，那么 mm_count 的值等于 1 。如果内核线
+		 * 程临时使用一个进程地址空间， mm_count 的值等于 2 。
 		 */
 		atomic_t mm_count;
 
@@ -409,6 +574,10 @@ struct mm_struct {
 		unsigned long data_vm;	   /* VM_WRITE & ~VM_SHARED & ~VM_STACK */
 		unsigned long exec_vm;	   /* VM_EXEC & ~VM_WRITE & ~VM_STACK */
 		unsigned long stack_vm;	   /* VM_STACK */
+		/*
+		 * 进程默认的虚拟内存标志是 VM_NOHUGEPAGE，即不使用透明巨型页；内核线程
+		 * 默认的虚拟内存标志是 0
+		 */
 		unsigned long def_flags;
 
 		spinlock_t arg_lock; /* protect the below fields */
@@ -427,6 +596,7 @@ struct mm_struct {
 		struct linux_binfmt *binfmt;
 
 		/* Architecture-specific MM context */
+		/* 处理器架构特定的内存管理上下文 */
 		mm_context_t context;
 
 		unsigned long flags; /* Must use atomic bitops to access */

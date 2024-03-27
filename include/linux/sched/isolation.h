@@ -15,6 +15,7 @@ enum hk_flags {
 	HK_FLAG_WQ		= (1 << 6),
 };
 
+/* 有定义 */
 #ifdef CONFIG_CPU_ISOLATION
 DECLARE_STATIC_KEY_FALSE(housekeeping_overridden);
 extern int housekeeping_any_cpu(enum hk_flags flags);

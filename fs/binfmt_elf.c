@@ -687,6 +687,15 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
 #endif
 }
 
+/*
+ * load_elf_binary
+ *   current->flags |= PF_RANDOMIZE
+ *   setup_new_exec
+ *     arch_pick_mmap_layout
+ *   setup_arg_pages
+ *   set_brk
+ *   arch_randomize_brk
+ */
 static int load_elf_binary(struct linux_binprm *bprm)
 {
 	struct file *interpreter = NULL; /* to shut gcc up */
@@ -876,14 +885,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
 		current->personality |= READ_IMPLIES_EXEC;
 
+	/* 判断是否允许用户虚拟地址空间随机机 */
 	if (!(current->personality & ADDR_NO_RANDOMIZE) && randomize_va_space)
 		current->flags |= PF_RANDOMIZE;
 
+	/* 其中会设置 mmap 区域的布局 */
 	setup_new_exec(bprm);
 	install_exec_creds(bprm);
 
 	/* Do this so that we can load the interpreter, if need be.  We will
 	   change some of these later */
+	/*
+	 * 把栈顶设置为 STACK_TOP 减去随机值，然后把环境变量和参数从临时栈移到最终的
+	 * 用户栈
+	 */
 	retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
 				 executable_stack);
 	if (retval < 0)
@@ -908,6 +923,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
 			/* There was a PT_LOAD segment with p_memsz > p_filesz
 			   before this one. Map anonymous pages, if needed,
 			   and clear the area.  */
+			/* 设置堆的起始地址，如果启用堆随机化，把堆的起始地址加上随机值 */
 			retval = set_brk(elf_bss + load_bias,
 					 elf_brk + load_bias,
 					 bss_prot);
@@ -1136,6 +1152,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	current->mm->end_data = end_data;
 	current->mm->start_stack = bprm->p;
 
+	/* 如果启用堆随机化，把堆的起始地址加上随机值 */
 	if ((current->flags & PF_RANDOMIZE) && (randomize_va_space > 1)) {
 		current->mm->brk = current->mm->start_brk =
 			arch_randomize_brk(current->mm);

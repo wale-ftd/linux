@@ -3112,11 +3112,20 @@ KSM_ATTR_RO(full_scans);
 static struct attribute *ksm_attrs[] = {
 	&sleep_millisecs_attr.attr,
 	&pages_to_scan_attr.attr,
+	/*
+	 * 可以设置为 0~2 。若设置 0 ，暂停 ksmd 内核线程；若设置 1 ，启动 ksmd ；
+	 * 若设置 2 ，取消所有已经合并好的页面
+	 */
 	&run_attr.attr,
+	/*
+	 * 合并后的页面数。如果 100 个页面的内容相同，那么可以把它们合并成一个页面，
+	 * 这时 pages_shared 的值为 1
+	 */
 	&pages_shared_attr.attr,
 	&pages_sharing_attr.attr,
 	&pages_unshared_attr.attr,
 	&pages_volatile_attr.attr,
+	/* 完整扫描和合并区域的次数 */
 	&full_scans_attr.attr,
 #ifdef CONFIG_NUMA
 	&merge_across_nodes_attr.attr,
@@ -3157,6 +3166,7 @@ static int __init ksm_init(void)
 	}
 
 #ifdef CONFIG_SYSFS
+	/* /sys/kernel/mm/ksm/ */
 	err = sysfs_create_group(mm_kobj, &ksm_attr_group);
 	if (err) {
 		pr_err("ksm: register sysfs failed\n");

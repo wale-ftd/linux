@@ -706,18 +706,23 @@ void handle_fasteoi_irq(struct irq_desc *desc)
 	 * then mask it and get out of here:
 	 */
 	if (unlikely(!desc->action || irqd_irq_disabled(&desc->irq_data))) {
+	/* 该中断没有指定 action 或 设置了 IRQD_IRQ_DISABLED */
 		desc->istate |= IRQS_PENDING;
+		/* 调用中断控制器 irq_chip 中的 irq_mask()回调函数屏蔽该中断 */
 		mask_irq(desc);
 		goto out;
 	}
 
 	kstat_incr_irqs_this_cpu(desc);
 	if (desc->istate & IRQS_ONESHOT)
+	/* 该中断类型不支持中断嵌套 */
 		mask_irq(desc);
 
 	preflow_handler(desc);
+	/* 中断处理的核心函数，真正处理硬件中断 */
 	handle_irq_event(desc);
 
+	/* 中断处理完成之后，需要发送一个 EOI 信号，通知中断控制器中断已经处理完毕 */
 	cond_unmask_eoi_irq(desc, chip);
 
 	raw_spin_unlock(&desc->lock);

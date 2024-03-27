@@ -407,6 +407,7 @@ void __init smp_cpus_done(unsigned int max_cpus)
 	setup_cpu_features();
 	hyp_mode_check();
 	apply_alternatives_all();
+	/* 把内核代码段和只读数据段设置为只读 */
 	mark_linear_text_alias_ro();
 }
 

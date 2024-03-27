@@ -33,6 +33,7 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 		unsigned long, prot, unsigned long, flags,
 		unsigned long, fd, off_t, off)
 {
+    /* off 要页对齐。文件映射时，表示文件的偏移量；匿名映射无意义 */
 	if (offset_in_page(off) != 0)
 		return -EINVAL;
 

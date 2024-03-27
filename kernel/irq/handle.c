@@ -19,6 +19,7 @@
 #include "internals.h"
 
 #ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
+/* == gic_handle_irq() */
 void (*handle_arch_irq)(struct pt_regs *) __ro_after_init;
 #endif
 
@@ -118,6 +119,7 @@ void __irq_wake_thread(struct irq_desc *desc, struct irqaction *action)
 	 * IRQTF_RUNTHREAD under desc->lock. If set it leaves
 	 * threads_oneshot untouched and runs the thread another time.
 	 */
+	/* 体现了无锁编程思想 */
 	desc->threads_oneshot |= action->thread_mask;
 
 	/*

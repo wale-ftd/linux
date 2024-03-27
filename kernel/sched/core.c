@@ -137,6 +137,7 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
  */
 	s64 __maybe_unused steal = 0, irq_delta = 0;
 
+/* 未定义 */
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
 	irq_delta = irq_time_read(cpu_of(rq)) - rq->prev_irq_time;
 
@@ -161,6 +162,7 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 	rq->prev_irq_time += irq_delta;
 	delta -= irq_delta;
 #endif
+/* 未定义 */
 #ifdef CONFIG_PARAVIRT_TIME_ACCOUNTING
 	if (static_key_false((&paravirt_steal_rq_enabled))) {
 		steal = paravirt_steal_clock(cpu_of(rq));
@@ -176,6 +178,7 @@ static void update_rq_clock_task(struct rq *rq, s64 delta)
 
 	rq->clock_task += delta;
 
+/* 未定义 */
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
 	if ((irq_delta + steal) && sched_feat(NONTASK_CAPACITY))
 		update_irq_load_avg(rq, irq_delta + steal);
@@ -855,6 +858,12 @@ void check_preempt_curr(struct rq *rq, struct task_struct *p, int flags)
 {
 	const struct sched_class *class;
 
+	/*
+	 * 如果被唤醒的进程和当前进程属于相同的调度类，那么调用调度类的
+	 * check_preempt_curr 方法以检查是否可以抢占当前进程。
+	 * 如果被唤醒的进程所属调度类的优先级高于当前进程所属调度类的优先级，那么
+	 * 给当前进程设置需要重新调度的标志。
+	 */
 	if (p->sched_class == rq->curr->sched_class) {
 		rq->curr->sched_class->check_preempt_curr(rq, p, flags);
 	} else {
@@ -945,7 +954,9 @@ static struct rq *move_queued_task(struct rq *rq, struct rq_flags *rf,
 }
 
 struct migration_arg {
+	/* 需要迁移的进程 */
 	struct task_struct *task;
+	/* 目标处理器 */
 	int dest_cpu;
 };
 
@@ -976,6 +987,7 @@ static struct rq *__migrate_task(struct rq *rq, struct rq_flags *rf,
  * and performs thread migration by bumping thread off CPU then
  * 'pushing' onto another runqueue.
  */
+/* 负责把进程从当前处理器迁移到目标处理器 */
 static int migration_cpu_stop(void *data)
 {
 	struct migration_arg *arg = data;
@@ -1002,10 +1014,19 @@ static int migration_cpu_stop(void *data)
 	 * holding rq->lock, if p->on_rq == 0 it cannot get enqueued because
 	 * we're holding p->pi_lock.
 	 */
+	/* 检查进程 p 是否在当前处理器上 */
 	if (task_rq(p) == rq) {
 		if (task_on_rq_queued(p))
+			/*
+			 * 如果进程 p 在当前处理器的运行队列中，那么把进程 p 迁移到目标处理
+			 * 器，从当前处理器的运行队中列删除，添加到目标处理器的运行队列中。
+			 */
 			rq = __migrate_task(rq, &rf, p, arg->dest_cpu);
 		else
+			/*
+			 * 如果进程 p 正在睡眠，那么使用进程描述符的成员 wake_cpu 记录目标
+			 * 处理器，等到唤醒进程 p 的时候迁移到目标处理器。
+			 */
 			p->wake_cpu = arg->dest_cpu;
 	}
 	rq_unlock(rq, &rf);
@@ -1116,10 +1137,17 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 		goto out;
 
 	dest_cpu = cpumask_any_and(cpu_valid_mask, new_mask);
+	/*
+	 * 如果进程正在执行或者被唤醒，假设进程在处理器 n 上，调度器就会向处理
+	 * 器 n 的迁移线程发出迁移请求："向处理器 n 的停机工作队列添加一个工作，
+	 * 工作函数是 migration_cpu_stop"，然后唤醒处理器 n 的迁移线程，等待迁
+	 * 移线程处理完迁移请求。
+	 */
 	if (task_running(rq, p) || p->state == TASK_WAKING) {
 		struct migration_arg arg = { p, dest_cpu };
 		/* Need help from migration thread: drop lock and wait. */
 		task_rq_unlock(rq, p, &rf);
+		/* migration_cpu_stop()负责把进程从当前处理器迁移到目标处理器 */
 		stop_one_cpu(cpu_of(rq), migration_cpu_stop, &arg);
 		tlb_migrate_finish(p->mm);
 		return 0;
@@ -1836,8 +1864,13 @@ out:
 	rcu_read_unlock();
 }
 
+/*
+ * 判断两个 CPU 是否具有高速缓存的亲和性。若它们同属于一个 SMT 或 MC 调度域，
+ * 则共享高速缓存
+ */
 bool cpus_share_cache(int this_cpu, int that_cpu)
 {
+    /* sd_llc_id 在 update_top_cache_domain()函数中赋值 */
 	return per_cpu(sd_llc_id, this_cpu) == per_cpu(sd_llc_id, that_cpu);
 }
 #endif /* CONFIG_SMP */
@@ -1976,6 +2009,13 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	 * set_current_state() the waiting thread does.
 	 */
 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+    /*
+     * 对于 arm64 ， spin lock 使用了 ldaxr ，只隐含了一条单方向的内存屏障指令，
+     * 在 spin lock 临界区里的读写指令不能向前越过临界区，但是 spin lock 临界区
+     * 前面的读写指令可以穿越到临界区里。所以这里要插入一个 smp_mb()指令。
+     *
+     * 见 include/linux/spinlock.h 的注释里的 case 1 。
+     */
 	smp_mb__after_spinlock();
 	if (!(p->state & state))
 		goto out;
@@ -2427,12 +2467,19 @@ void wake_up_new_task(struct task_struct *p)
 	 * as we're not fully set-up yet.
 	 */
 	p->recent_used_cpu = task_cpu(p);
+    /*
+     * 为子进程设置即将要运行的 CPU 。在前面 sched_fork()函数已经设置了父进程的
+     * CPU 到子进程 p->cpu 中，为何这里要重新设置呢？原因有：
+     *   1. 因为在创建新进程的过程中， cpus_allowed 可能会发生变化
+     *   2. 由于之前选择的 CPU 可能关闭了
+     */
 	__set_task_cpu(p, select_task_rq(p, task_cpu(p), SD_BALANCE_FORK, 0));
 #endif
 	rq = __task_rq_lock(p, &rf);
 	update_rq_clock(rq);
 	post_init_entity_util_avg(&p->se);
 
+	/* 把子进程添加到调度器中 */
 	activate_task(rq, p, ENQUEUE_NOCLOCK);
 	p->on_rq = TASK_ON_RQ_QUEUED;
 	trace_sched_wakeup_new(p);
@@ -2545,6 +2592,7 @@ static inline void prepare_task(struct task_struct *next)
 	 * Claim the task as running, we do this before switching to it
 	 * such that any running task will have this set.
 	 */
+	/* 表示 next 进程即将进入执行状态， prev 进程的清零是在 finish_task() */
 	next->on_cpu = 1;
 #endif
 }
@@ -2562,6 +2610,7 @@ static inline void finish_task(struct task_struct *prev)
 	 *
 	 * Pairs with the smp_cond_load_acquire() in try_to_wake_up().
 	 */
+	/* 表示 prev 进程已经退出执行状态，相当于由 next 进程来收拾 prev 进程的"残局" */
 	smp_store_release(&prev->on_cpu, 0);
 #endif
 }
@@ -2591,6 +2640,7 @@ static inline void finish_lock_switch(struct rq *rq)
 	 * prev into current:
 	 */
 	spin_acquire(&rq->lock.dep_map, 0, 0, _THIS_IP_);
+	/* 会打开本地中断 */
 	raw_spin_unlock_irq(&rq->lock);
 }
 
@@ -2674,6 +2724,10 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 		      current->comm, current->pid, preempt_count()))
 		preempt_count_set(FORK_PREEMPT_COUNT);
 
+	/*
+	 * 如果进程 prev 是内核线程，那么 rq->prev_mm 存放它借用的内存描述符。这里
+	 * 把 rq->prev_mm 设置为空指针
+	 */
 	rq->prev_mm = NULL;
 
 	/*
@@ -2809,6 +2863,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	prepare_task_switch(rq, prev, next);
 
 	mm = next->mm;
+    /* 为什么要用 active_mm ？因为 perv 进程也可能是一个内核线程，它没有 mm */
 	oldmm = prev->active_mm;
 	/*
 	 * For paravirt, this is coupled with an exit in switch_to to
@@ -2825,14 +2880,27 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	 * user-space.
 	 */
 	if (!mm) {
+    /* next 是内核线程 */
 		next->active_mm = oldmm;
+        /* 释放在 finish_task_switch() */
 		mmgrab(oldmm);
+		/*
+		 * 通知处理器架构不需要切换用户虚拟地址空间，这种加速进程切换的技术称
+		 * lazy TLB。 ARM64 架构定义的函数 enter_lazy_tlb 是一个空函数。
+		 */
 		enter_lazy_tlb(oldmm, next);
 	} else
+    /* next 是普通进程，切换到 next 进程的进程地址空间。其实就是 switch_mm() */
 		switch_mm_irqs_off(oldmm, mm, next);
 
 	if (!prev->mm) {
+    /* prev 是一个内核线程 */
+        /* prev 马上就要被换出 */
 		prev->active_mm = NULL;
+        /*
+         * 把它借用的用户虚拟地址空间保存在运行队列的成员 prev_mm 中，在
+         * finish_task_switch()用到
+         */
 		rq->prev_mm = oldmm;
 	}
 
@@ -2841,9 +2909,11 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	prepare_lock_switch(rq, next, rf);
 
 	/* Here we just switch the register state and the stack. */
+    /* 切换到 next 进程的内核栈和硬件上下文件 */
 	switch_to(prev, next, prev);
 	barrier();
 
+    /* 在 next 进程中做 prev 进程的清理工作 */
 	return finish_task_switch(prev);
 }
 
@@ -3059,6 +3129,7 @@ void scheduler_tick(void)
 
 	update_rq_clock(rq);
 	curr->sched_class->task_tick(rq, curr, 0);
+    /* 更新 rq.cpu_load[] */
 	cpu_load_update_active(rq);
 	calc_global_load_tick(rq);
 	psi_task_tick(rq);
@@ -3069,6 +3140,7 @@ void scheduler_tick(void)
 
 #ifdef CONFIG_SMP
 	rq->idle_balance = idle_cpu(cpu);
+    /* 触发 SMP 负载均衡机制 */
 	trigger_load_balance(rq);
 #endif
 }
@@ -3392,6 +3464,10 @@ again:
  *
  * WARNING: must be called with preemption disabled!
  */
+/*
+ * preempt 表示是否抢占调度，值为 true 表示抢占调度，强制剥夺当前进程对处理器
+ * 的使用权；值为 false 表示主动调度，当前进程主动让出处理器
+ */
 static void __sched notrace __schedule(bool preempt)
 {
 	struct task_struct *prev, *next;
@@ -3404,6 +3480,7 @@ static void __sched notrace __schedule(bool preempt)
 	rq = cpu_rq(cpu);
 	prev = rq->curr;
 
+    /* 在 atomic 上下文(即硬中断、软中断上下文)中，不可调度 */
 	schedule_debug(prev);
 
 	if (sched_feat(HRTICK))
@@ -3428,10 +3505,32 @@ static void __sched notrace __schedule(bool preempt)
 	update_rq_clock(rq);
 
 	switch_count = &prev->nivcsw;
+    /*
+     * 判断是否为抢占调度。 prev->state == 0(运行状态)，说明也是发生抢占调度。
+     *
+     * 为什么要判断 !preempt ？以 wait_event 为例讲述：
+     *   wait_event
+     *      struct wait_queue_entry __wq_entry;
+     *      list_add(&wq_entry->entry, &wq_head->head);
+     *          // tag2
+     *      set_current_state(state);
+     *          // tag1(此处发生中断)
+     *      schedule()
+     *   这里需要考虑以下两种情况：
+     *     1. 假设 wait_event 在运行过程中没有发生中断和抢占，那么进程会在
+     *        schedue() 中被移出就绪队列
+     *     2. 假设进程在 tag1 发生了中断，中断处理返回前夕进程被抢占调度。如果
+     *        不对当前进程的 preempt 条件进行判断，那么当前进程会被移出运行队列。
+     *        如果读者在编写代码时没有处理好设置进程状态和加入等待队列的顺序关系，
+     *        例如把 tag2 前后两行代码交换位置，那么进程将永远也回不来了，因为
+     *        进程还没有添加到等待队列里，所以即使调用 wake_up() 也没有办法被唤醒
+     */
 	if (!preempt && prev->state) {
+    /* 主动请求调度 */
 		if (signal_pending_state(prev->state, prev)) {
 			prev->state = TASK_RUNNING;
 		} else {
+		    /* 把当前进程移出就绪队列 */
 			deactivate_task(rq, prev, DEQUEUE_SLEEP | DEQUEUE_NOCLOCK);
 			prev->on_rq = 0;
 
@@ -3457,10 +3556,12 @@ static void __sched notrace __schedule(bool preempt)
 	}
 
 	next = pick_next_task(rq, prev, &rf);
+    /* 清除当前进程的 TIF_NEED_RESCHED 标志，表明它接下来不会被抢占调度 */
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
 
 	if (likely(prev != next)) {
+    /* 进行进程切换 */
 		rq->nr_switches++;
 		rq->curr = next;
 		/*
@@ -3519,6 +3620,12 @@ static inline void sched_submit_work(struct task_struct *tsk)
 		blk_schedule_flush_plug(tsk);
 }
 
+/*
+ * 变种封装：
+ *   1. preempt_schedule() 用于可抢占内核的调度
+ *   2. preempt_schedult_irq() 用于可抢占内核的调度，从中断结束返回时调用
+ *   3. schedule_timeout()
+ */
 asmlinkage __visible void __sched schedule(void)
 {
 	struct task_struct *tsk = current;
@@ -3622,6 +3729,13 @@ static void __sched notrace preempt_schedule_common(void)
  * this is the entry point to schedule() from in-kernel preemption
  * off of preempt_enable. Kernel preemptions off return from interrupt
  * occur there and call schedule directly.
+ */
+/*
+ * 内核抢占增加了一些抢占点，如
+ *   1.在调用 preempt_enable()开启抢占的时候。
+ *   2.在调用 local_bh_enable()开启软中断的时候。
+ *   3.在调用 spin_unlock()释放自旋锁的时候。
+ *   4.在中断处理程序返回内核模式的时候(el1_preempt)
  */
 asmlinkage __visible void __sched notrace preempt_schedule(void)
 {
@@ -6374,6 +6488,10 @@ void sched_move_task(struct task_struct *tsk)
 	if (queued)
 		dequeue_task(rq, tsk, queue_flags);
 	if (running)
+        /*
+         * 如果该进程正在运行中，刚才已经调用 dequeue_task()函数让进程退出就绪
+         * 队列，现在只能将其添加回就绪队列中
+         */
 		put_prev_task(rq, tsk);
 
 	sched_change_group(tsk, TASK_MOVE_GROUP);
@@ -6489,12 +6607,15 @@ static int cpu_cgroup_can_attach(struct cgroup_taskset *tset)
 	return ret;
 }
 
+/* 将进程添加到组调度里 */
 static void cpu_cgroup_attach(struct cgroup_taskset *tset)
 {
 	struct task_struct *task;
 	struct cgroup_subsys_state *css;
 
+    /* 遍历参数 tset 包含的进程链表 */
 	cgroup_taskset_for_each(task, css, tset)
+	    /* 将进程迁移到组调度中 */
 		sched_move_task(task);
 }
 
@@ -7006,6 +7127,15 @@ static struct cftype cpu_files[] = {
 	{ }	/* terminate */
 };
 
+/*
+ * 组调度的基本策略是：
+ *   1. 在创建组调度 tg 时， tg 为每个 CPU 同时创建组调度内部使用的 cfs_rq
+ *   2. 组调度作为一个调度实体添加到系统的 CFS 就绪队列 rq->cfs_rq 中
+ *   3. 进程添加到一个组中后，进程就脱离了系统的 CFS 就绪队列，并且添加到组调度
+ *      里的 CFS 就绪队列 tg->cfs_rq[] 中
+ *   4. 在选择下一个进程时，从系统的 CFS 就绪队列开始，如果选中的调度实体是组调
+ *      度 tg ，那么还需要继续遍历 tg 中的就绪队列，从中选择一个进程来运行
+ */
 struct cgroup_subsys cpu_cgrp_subsys = {
 	.css_alloc	= cpu_cgroup_css_alloc,
 	.css_online	= cpu_cgroup_css_online,
@@ -7059,6 +7189,7 @@ const int sched_prio_to_weight[40] = {
  * precalculated inverse to speed up arithmetics by turning divisions
  * into multiplications:
  */
+/* 预先做了除法，用于在 __calc_delta()里计算 vruntime */
 const u32 sched_prio_to_wmult[40] = {
  /* -20 */     48388,     59856,     76040,     92818,    118348,
  /* -15 */    147320,    184698,    229616,    287308,    360437,

@@ -39,6 +39,7 @@ struct backing_dev_info;
  */
 enum writeback_sync_modes {
 	WB_SYNC_NONE,	/* Don't wait on anything */
+	/* 数据完整性回写模式。即回写时阻塞，直到数据回写完成 */
 	WB_SYNC_ALL,	/* Wait on every mapping */
 };
 
@@ -62,6 +63,7 @@ struct writeback_control {
 
 	enum writeback_sync_modes sync_mode;
 
+	/* 回写请求由周期性机制发出。见 wb_check_old_data_flush() */
 	unsigned for_kupdate:1;		/* A kupdate writeback */
 	unsigned for_background:1;	/* A background writeback */
 	unsigned tagged_writepages:1;	/* tag-and-write to avoid livelock */

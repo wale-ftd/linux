@@ -103,6 +103,10 @@ unsigned long __xchg(unsigned long x, volatile void *ptr, int size)
 #define cmpxchg64_local(ptr, o, n) __cmpxchg64_local_generic((ptr), (o), (n))
 #endif
 
+/*
+ * 比较 ptr->counter 是否与 o 的值相等，若相等，则把 n 的值设置到 ptr->counter
+ * 的值中，返回 o 的值(即 ptr->counter 原值)；若不相等，返回 ptr->counter 原值
+ */
 #define cmpxchg(ptr, o, n)	cmpxchg_local((ptr), (o), (n))
 #define cmpxchg64(ptr, o, n)	cmpxchg64_local((ptr), (o), (n))
 

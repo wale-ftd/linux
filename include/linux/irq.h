@@ -222,6 +222,7 @@ enum {
 	IRQD_MOVE_PCNTXT		= (1 << 15),
 	IRQD_IRQ_DISABLED		= (1 << 16),
 	IRQD_IRQ_MASKED			= (1 << 17),
+	/* 表示正在处理硬件中断 */
 	IRQD_IRQ_INPROGRESS		= (1 << 18),
 	IRQD_WAKEUP_ARMED		= (1 << 19),
 	IRQD_FORWARDED_TO_VCPU		= (1 << 20),

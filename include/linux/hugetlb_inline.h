@@ -13,6 +13,7 @@ static inline bool is_vm_hugetlb_page(struct vm_area_struct *vma)
 
 #else
 
+/* VMA 是否支持巨页 */
 static inline bool is_vm_hugetlb_page(struct vm_area_struct *vma)
 {
 	return false;

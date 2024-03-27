@@ -406,6 +406,10 @@ void ptdump_check_wx(void)
 static int ptdump_init(void)
 {
 	ptdump_initialize();
+    /*
+     * dump 页表的调试接口。它会遍历内核空间所有已经映射的页面，分别显示虚拟
+     * 地址区间、页表大小、页表等级、页表属性以及内存属性等信息
+     */
 	return ptdump_debugfs_register(&kernel_ptdump_info,
 					"kernel_page_tables");
 }

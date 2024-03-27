@@ -95,11 +95,13 @@ static __always_inline void queued_spin_lock(struct qspinlock *lock)
  * queued_spin_unlock - release a queued spinlock
  * @lock : Pointer to queued spinlock structure
  */
+/* 如果具体 arch 没有定义 queued_spin_unlock ，那就使用这个通用的 */
 static __always_inline void queued_spin_unlock(struct qspinlock *lock)
 {
 	/*
 	 * unlock() needs release semantics:
 	 */
+	/* 只修改 locked 域，因为其它位可能还有值 */
 	smp_store_release(&lock->locked, 0);
 }
 #endif

@@ -72,7 +72,9 @@ struct gic_chip_data {
 	struct irq_chip chip;
 	union gic_base dist_base;
 	union gic_base cpu_base;
+	/* 分发器相关寄存器的基地址 */
 	void __iomem *raw_dist_base;
+	/* CPU 接口相关寄存器的基地址 */
 	void __iomem *raw_cpu_base;
 	u32 percpu_offset;
 #if defined(CONFIG_CPU_PM) || defined(CONFIG_ARM_GIC_PM)
@@ -155,6 +157,7 @@ static inline void gic_set_base_accessor(struct gic_chip_data *data,
 }
 #else
 #define gic_data_dist_base(d)	((d)->dist_base.common_base)
+/* 是这个 */
 #define gic_data_cpu_base(d)	((d)->cpu_base.common_base)
 #define gic_set_base_accessor(d, f)
 #endif
@@ -353,10 +356,12 @@ static int gic_set_affinity(struct irq_data *d, const struct cpumask *mask_val,
 static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 {
 	u32 irqstat, irqnr;
+	/* 在本文件中定义 */
 	struct gic_chip_data *gic = &gic_data[0];
 	void __iomem *cpu_base = gic_data_cpu_base(gic);
 
 	do {
+		/* 软件响应中断 */
 		irqstat = readl_relaxed(cpu_base + GIC_CPU_INTACK);
 		irqnr = irqstat & GICC_IAR_INT_ID_MASK;
 
@@ -1218,6 +1223,7 @@ static int __init __gic_init_bases(struct gic_chip_data *gic,
 		cpuhp_setup_state_nocalls(CPUHP_AP_IRQ_GIC_STARTING,
 					  "irqchip/arm/gic:starting",
 					  gic_starting_cpu, NULL);
+		/* 设置 GIC 的中断处理函数 */
 		set_handle_irq(gic_handle_irq);
 		if (static_branch_likely(&supports_deactivate_key))
 			pr_info("GIC: Using split EOI/Deactivate mode\n");
@@ -1225,12 +1231,14 @@ static int __init __gic_init_bases(struct gic_chip_data *gic,
 
 	if (static_branch_likely(&supports_deactivate_key) && gic == &gic_data[0]) {
 		name = kasprintf(GFP_KERNEL, "GICv2");
+		/* 初始化 irq_chip */
 		gic_init_chip(gic, NULL, name, true);
 	} else {
 		name = kasprintf(GFP_KERNEL, "GIC-%d", (int)(gic-&gic_data[0]));
 		gic_init_chip(gic, NULL, name, false);
 	}
 
+	/* 初始化 irq_domain */
 	ret = gic_init_bases(gic, irq_start, handle);
 	if (ret)
 		kfree(name);
@@ -1434,6 +1442,7 @@ static void __init gic_of_setup_kvm_info(struct device_node *node)
 		gic_set_kvm_info(&gic_v2_kvm_info);
 }
 
+/* start_kernel() -> init_IRQ() -> irqchip_init() -> of_irq_init() -> gic_of_init() */
 int __init
 gic_of_init(struct device_node *node, struct device_node *parent)
 {
@@ -1459,6 +1468,7 @@ gic_of_init(struct device_node *node, struct device_node *parent)
 	if (gic_cnt == 0 && !gic_check_eoimode(node, &gic->raw_cpu_base))
 		static_branch_disable(&supports_deactivate_key);
 
+	/* 设置 GIC 的中断处理函数 */
 	ret = __gic_init_bases(gic, -1, &node->fwnode);
 	if (ret) {
 		gic_teardown(gic);
@@ -1484,6 +1494,14 @@ gic_of_init(struct device_node *node, struct device_node *parent)
 IRQCHIP_DECLARE(gic_400, "arm,gic-400", gic_of_init);
 IRQCHIP_DECLARE(arm11mp_gic, "arm,arm11mp-gic", gic_of_init);
 IRQCHIP_DECLARE(arm1176jzf_dc_gic, "arm,arm1176jzf-devchip-gic", gic_of_init);
+/*
+ * 在 __irqchip_of_table 段里定义了一系列变量。见 drivers\irqchip\irqchip.c 。
+static const struct of_device_id __of_table_cortex_a15_gic __used
+ __section(__irqchip_of_table) = {
+     .compatible = "arm,cortex-a15-gic",
+     .data = gic_of_init
+}
+ */
 IRQCHIP_DECLARE(cortex_a15_gic, "arm,cortex-a15-gic", gic_of_init);
 IRQCHIP_DECLARE(cortex_a9_gic, "arm,cortex-a9-gic", gic_of_init);
 IRQCHIP_DECLARE(cortex_a7_gic, "arm,cortex-a7-gic", gic_of_init);

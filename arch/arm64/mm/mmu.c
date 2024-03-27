@@ -288,6 +288,8 @@ static inline bool use_1G_block(unsigned long addr, unsigned long next,
 	if (((addr | next | phys) & ~PUD_MASK) != 0)
 		return false;
 
+    /* 映射的内存块大小正好是 PUD_SIZE 对齐 */
+
 	return true;
 }
 
@@ -309,6 +311,10 @@ static void alloc_init_pud(pgd_t *pgdp, unsigned long addr, unsigned long end,
 	}
 	BUG_ON(pgd_bad(pgd));
 
+    /*
+     * 通过 pud 页表的起始物理地址(*pgdp) + addr 对应的索引，就可以得到对应的
+     * pud 页表项的物理地址，然后再映射到固定的虚拟地址上
+     */
 	pudp = pud_set_fixmap_offset(pgdp, addr);
 	do {
 		pud_t old_pud = READ_ONCE(*pudp);
@@ -318,8 +324,14 @@ static void alloc_init_pud(pgd_t *pgdp, unsigned long addr, unsigned long end,
 		/*
 		 * For 4K granule only, attempt to put down a 1GB block
 		 */
+		/*
+		 * 判断是否使用 1GB 大小的内存块来映射。如果这里要映射的内存块大小
+		 * 正好是 PUD_SIZE ，那么只需要映射到 PUD 即可，接下来的 PMD 和 PTE
+		 * 等到真正需要使用时再映射
+		 */
 		if (use_1G_block(addr, next, phys) &&
 		    (flags & NO_BLOCK_MAPPINGS) == 0) {
+		    /* 设置 PUD 页表项 */
 			pud_set_huge(pudp, phys, prot);
 
 			/*
@@ -329,6 +341,7 @@ static void alloc_init_pud(pgd_t *pgdp, unsigned long addr, unsigned long end,
 			BUG_ON(!pgattr_change_is_safe(pud_val(old_pud),
 						      READ_ONCE(pud_val(*pudp))));
 		} else {
+            /* 进行一下级页表的映射 */
 			alloc_init_cont_pmd(pudp, addr, next, phys, prot,
 					    pgtable_alloc, flags);
 
@@ -659,13 +672,32 @@ static void __init map_kernel(pgd_t *pgdp)
  * paging_init() sets up the page tables, initialises the zone memory
  * maps and sets up the zero page.
  */
+/* 对内核空间的多个内存段做重新映射 */
 void __init paging_init(void)
 {
+    /*
+     * 在内存线性映射完成之前，不能直接通过 __pa()这个宏直接从线性映射地址转换到
+     * 物理地址。
+     *
+     * 看下面是如何获取 swapper_pg_dir 对应的物理地址的。swapper_pg_dir 是一个链
+     * 接地址(即虚拟地址)，因为在内核启动的汇编代码中会做一次简单的块映射。
+     * __pa_symbol()宏把内核符号的虚拟地址转换为物理地址。 pgd_set_fixmap()函数
+     * 做一个固定映射，把 swapper_pg_dir 页表重新映射到固定映射区域。
+     */
 	pgd_t *pgdp = pgd_set_fixmap(__pa_symbol(swapper_pg_dir));
 
+    /*
+     * 对内核映像文件的各个块重新映射。在 head.S 文件中，对内核映射文件做了块映射
+     * (2MB)，现在需要使用更精细的页机制(4KB)来重新映射。
+     */
 	map_kernel(pgdp);
+    /*
+     * 物理内存的线性映射。物理内存会全部线性映射到以 PAGE_OFFSET 开始的内核空间
+     * 的虚拟地址，以加速内核访问内存。
+     */
 	map_mem(pgdp);
 
+    /* 取消前面做的固定区域映射 */
 	pgd_clear_fixmap();
 
 	cpu_replace_ttbr1(lm_alias(swapper_pg_dir));

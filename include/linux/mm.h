@@ -154,6 +154,7 @@ extern int sysctl_max_map_count;
 extern unsigned long sysctl_user_reserve_kbytes;
 extern unsigned long sysctl_admin_reserve_kbytes;
 
+/* 定义在 mm/util.c 里 */
 extern int sysctl_overcommit_memory;
 extern int sysctl_overcommit_ratio;
 extern unsigned long sysctl_overcommit_kbytes;
@@ -171,6 +172,7 @@ extern int overcommit_kbytes_handler(struct ctl_table *, int, void __user *,
 /* test whether an address (unsigned long or pointer) is aligned to PAGE_SIZE */
 #define PAGE_ALIGNED(addr)	IS_ALIGNED((unsigned long)(addr), PAGE_SIZE)
 
+/* 从 LRU 的尾部取 */
 #define lru_to_page(head) (list_entry((head)->prev, struct page, lru))
 
 /*
@@ -202,45 +204,74 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_READ		0x00000001	/* currently active flags */
 #define VM_WRITE	0x00000002
 #define VM_EXEC		0x00000004
+/* 允许被多个进程共享 */
 #define VM_SHARED	0x00000008
 
 /* mprotect() hardcodes VM_MAYREAD >> 4 == VM_READ, and so for r/w/x bits. */
+/* 允许设置 VM_READ 属性。 do_mprotect_pkey()里使用 */
 #define VM_MAYREAD	0x00000010	/* limits for mprotect() etc */
 #define VM_MAYWRITE	0x00000020
 #define VM_MAYEXEC	0x00000040
 #define VM_MAYSHARE	0x00000080
 
 #define VM_GROWSDOWN	0x00000100	/* general info on the segment */
+/* 表示该 VMA 适用于用户态的缺页异常处理 */
 #define VM_UFFD_MISSING	0x00000200	/* missing pages tracking */
+/*
+ * tells the core MM that the base pages are just raw PFN mappings, and do not
+ * have a "struct page" associated with them
+ */
+/*
+ * 不希望关联页描述符，直接使用页帧号，可能是因为页描述符不存在，也可能是因为不
+ * 想使用页描述符。
+ * vm_inster_pfn() 插入 VMA
+ */
 #define VM_PFNMAP	0x00000400	/* Page-ranges managed without "struct page", just pure PFN */
 #define VM_DENYWRITE	0x00000800	/* ETXTBSY on write attempts.. */
 #define VM_UFFD_WP	0x00001000	/* wrprotect pages tracking */
 
+/*
+ * 表示该 VMA 的内存会立刻分配物理内存，并且页面被锁定在内存中，不会被交换到交
+ * 换分区
+ */
 #define VM_LOCKED	0x00002000
+/* tells people not to look at these pages(accesses can have side effects) */
 #define VM_IO           0x00004000	/* Memory mapped I/O or similar */
 
 					/* Used by sys_madvise() */
+/* 用来提示文件系统，如果进程按顺序读一个文件，文件系统可以预读文件，提高性能 */
 #define VM_SEQ_READ	0x00008000	/* App will access data sequentially */
 #define VM_RAND_READ	0x00010000	/* App will not benefit from clustered reads */
 
 #define VM_DONTCOPY	0x00020000      /* Do not copy this vma on fork */
+/* Disable vma merging and expanding with mremap() */
 #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
 #define VM_LOCKONFAULT	0x00080000	/* Lock the pages covered when they are faulted in */
+/*
+ * 表示虚拟内存区域需要记账，判断所有进程申请的虚拟内存的总和是否超过物理内存容
+ * 量。如在创建 IPC 以共享 VMA 时，检测是否有足够的空闲内存用于映射
+ */
 #define VM_ACCOUNT	0x00100000	/* Is a VM accounted object */
+/* 表示不需要预留物理内存 */
 #define VM_NORESERVE	0x00200000	/* should the VM suppress accounting */
 #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
 #define VM_SYNC		0x00800000	/* Synchronous page faults */
 #define VM_ARCH_1	0x01000000	/* Architecture-specific flag */
+/* 表示不会从父进程相应的 VMA 中复制页表到子进程的 VMA 中 */
 #define VM_WIPEONFORK	0x02000000	/* Wipe VMA contents in child. */
+/* Omit vma from core dump, even when VM_IO turned off */
 #define VM_DONTDUMP	0x04000000	/* Do not include in the core dump */
 
+/* 软件模拟实现的脏位。用于一些特殊的架构 */
 #ifdef CONFIG_MEM_SOFT_DIRTY
 # define VM_SOFTDIRTY	0x08000000	/* Not soft dirty clean area */
 #else
 # define VM_SOFTDIRTY	0
 #endif
 
+/* 如使用 vm_insert_page()插入 VMA */
 #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
+/* 表示虚拟内存区域使用 transparent hugepage */
 #define VM_HUGEPAGE	0x20000000	/* MADV_HUGEPAGE marked this vma */
 #define VM_NOHUGEPAGE	0x40000000	/* MADV_NOHUGEPAGE marked this vma */
 #define VM_MERGEABLE	0x80000000	/* KSM may merge identical pages */
@@ -336,6 +367,7 @@ extern unsigned int kobjsize(const void *objp);
  */
 extern pgprot_t protection_map[16];
 
+/* 写内存导致的 page fault */
 #define FAULT_FLAG_WRITE	0x01	/* Fault was a write access */
 #define FAULT_FLAG_MKWRITE	0x02	/* Fault was mkwrite of existing pte */
 #define FAULT_FLAG_ALLOW_RETRY	0x04	/* Retry fault if blocking */
@@ -369,8 +401,10 @@ extern pgprot_t protection_map[16];
  */
 struct vm_fault {
 	struct vm_area_struct *vma;	/* Target VMA */
+	/* 如 FAULT_FLAG_WRITE 等 */
 	unsigned int flags;		/* FAULT_FLAG_xxx flags */
 	gfp_t gfp_mask;			/* gfp mask to be used for allocations */
+	/* 由 linear_page_index() 获取 */
 	pgoff_t pgoff;			/* Logical page offset based on vma */
 	unsigned long address;		/* Faulting virtual address */
 	pmd_t *pmd;			/* Pointer to pmd entry matching
@@ -422,9 +456,11 @@ struct vm_operations_struct {
 	void (*close)(struct vm_area_struct * area);
 	int (*split)(struct vm_area_struct * area, unsigned long addr);
 	int (*mremap)(struct vm_area_struct * area);
+	/* 如 filemap_fault, shmem_fault, ext4_filemap_fault 等 */
 	vm_fault_t (*fault)(struct vm_fault *vmf);
 	vm_fault_t (*huge_fault)(struct vm_fault *vmf,
 			enum page_entry_size pe_size);
+	/* do_fault_around()里用。如 filemap_map_pages, shmem_map_pages 等 */
 	void (*map_pages)(struct vm_fault *vmf,
 			pgoff_t start_pgoff, pgoff_t end_pgoff);
 	unsigned long (*pagesize)(struct vm_area_struct * area);
@@ -553,6 +589,7 @@ static inline int put_page_testzero(struct page *page)
  * This can be called when MMU is off so it must not access
  * any of the virtual mappings.
  */
+/* 如果 page->_refcount 为 0 ，则返回 0 ；否则返回非 0 */
 static inline int get_page_unless_zero(struct page *page)
 {
 	return page_ref_add_unless(page, 1, 0);
@@ -827,6 +864,7 @@ vm_fault_t finish_mkwrite_fault(struct vm_fault *vmf);
  */
 
 /* Page flags: | [SECTION] | [NODE] | ZONE | [LAST_CPUPID] | ... | FLAGS | */
+/* SECTION 是稀疏内存模型中的段编号 */
 #define SECTIONS_PGOFF		((sizeof(unsigned long)*8) - SECTIONS_WIDTH)
 #define NODES_PGOFF		(SECTIONS_PGOFF - NODES_WIDTH)
 #define ZONES_PGOFF		(NODES_PGOFF - ZONES_WIDTH)
@@ -1257,6 +1295,7 @@ void page_address_init(void);
 #endif
 
 #if !defined(HASHED_PAGE_VIRTUAL) && !defined(WANT_PAGE_VIRTUAL)
+/* 是这个 */
 #define page_address(page) lowmem_page_address(page)
 #define set_page_address(page, address)  do { } while(0)
 #define page_address_init()  do { } while(0)
@@ -1328,16 +1367,22 @@ static inline void clear_page_pfmemalloc(struct page *page)
  * just gets major/minor fault counters bumped up.
  */
 
+/* 在缺页异常处理过程中无法分配内存 */
 #define VM_FAULT_OOM	0x0001
+/* 系统中有内存但是遇到了无法处理的错误，发送 SIGBUS 信号来终止发生异常的进程 */
 #define VM_FAULT_SIGBUS	0x0002
 #define VM_FAULT_MAJOR	0x0004
 #define VM_FAULT_WRITE	0x0008	/* Special case for get_user_pages */
 #define VM_FAULT_HWPOISON 0x0010	/* Hit poisoned small page */
 #define VM_FAULT_HWPOISON_LARGE 0x0020  /* Hit poisoned large page. Index encoded in upper bits */
+/* 对于无法处理的错误，发送 SIGSEGV 信号来终止进程 */
 #define VM_FAULT_SIGSEGV 0x0040
 
+/* 表示缺页异常处理函数安装了新的 PTE ，这次缺页异常不需要返回一个新的页面 */
 #define VM_FAULT_NOPAGE	0x0100	/* ->fault installed the pte, not return page */
+/* 缺页异常处理函数持有了页锁 */
 #define VM_FAULT_LOCKED	0x0200	/* ->fault locked the returned page */
+/* 缺页异常处理函数被阻塞了，需要重试 */
 #define VM_FAULT_RETRY	0x0400	/* ->fault blocked, must retry */
 #define VM_FAULT_FALLBACK 0x0800	/* huge page fault failed, fall back to small */
 #define VM_FAULT_DONE_COW   0x1000	/* ->fault has fully handled COW */
@@ -1348,6 +1393,7 @@ static inline void clear_page_pfmemalloc(struct page *page)
 #define VM_FAULT_ERROR	(VM_FAULT_OOM | VM_FAULT_SIGBUS | VM_FAULT_SIGSEGV | \
 			 VM_FAULT_HWPOISON | VM_FAULT_HWPOISON_LARGE | \
 			 VM_FAULT_FALLBACK)
+/* arch 可能也会定义一些 VM_FAULT_xxx ，如 VM_FAULT_BADMAP */
 
 #define VM_FAULT_RESULT_TRACE \
 	{ VM_FAULT_OOM,			"OOM" }, \
@@ -1760,6 +1806,7 @@ static inline void sync_mm_rss(struct mm_struct *mm)
 #endif
 
 #ifndef __HAVE_ARCH_PTE_DEVMAP
+/* ARM64 用这个 */
 static inline int pte_devmap(pte_t pte)
 {
 	return 0;
@@ -2447,6 +2494,7 @@ int __must_check write_one_page(struct page *page);
 void task_dirty_inc(struct task_struct *tsk);
 
 /* readahead.c */
+/* 默认预读大小 */
 #define VM_MAX_READAHEAD	128	/* kbytes */
 #define VM_MIN_READAHEAD	16	/* kbytes (includes current page) */
 
@@ -2607,8 +2655,9 @@ struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 				 * and return without waiting upon it */
 #define FOLL_POPULATE	0x40	/* fault in page */
 #define FOLL_SPLIT	0x80	/* don't return transhuge pages, split them */
-#define FOLL_HWPOISON	0x100	/* check page is hwpoisoned */
+#define FOLL_HWPOISON	0x100	/* check page is hwpoisoned(硬件污染的) */
 #define FOLL_NUMA	0x200	/* force NUMA hinting page fault */
+/* 等待页面合并 */
 #define FOLL_MIGRATION	0x400	/* wait for page to replace migration entry */
 #define FOLL_TRIED	0x800	/* a retry, previous pass started an IO */
 #define FOLL_MLOCK	0x1000	/* lock present pages */

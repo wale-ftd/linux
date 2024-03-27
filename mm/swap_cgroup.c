@@ -8,6 +8,7 @@
 static DEFINE_MUTEX(swap_cgroup_mutex);
 struct swap_cgroup_ctrl {
 	struct page **map;
+	/* map 指向的 struct page * 的个数 */
 	unsigned long length;
 	spinlock_t	lock;
 };

@@ -43,13 +43,23 @@
 /* How many pages do we try to swap or page in/out together? */
 int page_cluster;
 
+/* 新页加入 */
 static DEFINE_PER_CPU(struct pagevec, lru_add_pvec);
+/*
+ * 当脏页被回写完成后，会借助页向量 lru_rotate_pvecs 将该页面放入到不活跃
+ * LRU 的尾部，这样可以优先回收该页面，见 rotate_reclaimable_page
+ */
 static DEFINE_PER_CPU(struct pagevec, lru_rotate_pvecs);
+/* active LRU 文件页面 -> inactive */
 static DEFINE_PER_CPU(struct pagevec, lru_deactivate_file_pvecs);
+/* 将活跃的匿名页移到非活跃的文件页缓存(清除 PG_Swapbacked)中 */
 static DEFINE_PER_CPU(struct pagevec, lru_lazyfree_pvecs);
 #ifdef CONFIG_SMP
+/* inactive LRU 页面 -> active */
 static DEFINE_PER_CPU(struct pagevec, activate_page_pvecs);
 #endif
+
+/* 引入了 per cpu LRU 缓存，需考虑 per cpu 到全局链表的同步。见 lru_add_drain_all() */
 
 /*
  * This path almost never happens for VM activity - pages are normally
@@ -368,6 +378,7 @@ static void __lru_cache_activate_page(struct page *page)
  * When a newly allocated page is not yet visible, so safe for non-atomic ops,
  * __SetPageReferenced(page) may be substituted for mark_page_accessed(page).
  */
+/* 第二次机会算法的核心实现 */
 void mark_page_accessed(struct page *page)
 {
 	page = compound_head(page);
@@ -516,6 +527,11 @@ static void lru_deactivate_file_fn(struct page *page, struct lruvec *lruvec,
 	ClearPageReferenced(page);
 	add_page_to_lru_list(page, lruvec, lru);
 
+    /*
+     * 当页面正处于 writeback 或者 dirty 时，会把该页面放入到不活跃文件 LRU 的头部(
+     * 前面的 add_page_to_lru_list())，便于给回写更多的时间，而 clean 的页面会放入
+     * 到 LRU 的尾部，可用于更快的回收。
+     */
 	if (PageWriteback(page) || PageDirty(page)) {
 		/*
 		 * PG_reclaim could be raced with end_page_writeback
@@ -614,6 +630,7 @@ void deactivate_file_page(struct page *page)
 		return;
 
 	if (likely(get_page_unless_zero(page))) {
+    /* page 的引用计数不为零 */
 		struct pagevec *pvec = &get_cpu_var(lru_deactivate_file_pvecs);
 
 		if (!pagevec_add(pvec, page) || PageCompound(page))

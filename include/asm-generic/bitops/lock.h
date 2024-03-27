@@ -15,6 +15,7 @@
  * the returned value is 0.
  * It can be used to implement bit locks.
  */
+/* 1: 对应的位已经被设置了，加锁失败； 0: 成功设置位，加锁成功 */
 static inline int test_and_set_bit_lock(unsigned int nr,
 					volatile unsigned long *p)
 {

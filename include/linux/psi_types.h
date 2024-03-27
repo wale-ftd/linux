@@ -80,6 +80,7 @@ struct psi_group {
 
 	/* Total stall times and sampled pressure averages */
 	u64 total[NR_PSI_STATES - 1];
+    /* 3 表示 avg10, avg60, avg300 */
 	unsigned long avg[NR_PSI_STATES - 1][3];
 };
 

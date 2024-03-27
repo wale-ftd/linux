@@ -32,21 +32,46 @@ struct notifier_block;		/* in notifier.h */
 #endif
 
 struct vm_struct {
+	/* 指向下一个 vm_struct 实例 */
 	struct vm_struct	*next;
+	/* 起始虚拟地址 */
 	void			*addr;
 	unsigned long		size;
+	/*
+	 * 如果设置了标志位 VM_ALLOC ，表示虚拟内存区域是使用函数 vmalloc 分配的。
+	 * 如果虚拟内存区域是使用函数 vmap 分配的， vm_struct 结构体的差别是：成员
+	 * flags 没有设置标志位 VM_ALLOC ，成员 pages 是空指针，成员 nr_pages 是 0 。
+	 */
 	unsigned long		flags;
+	/*
+	 * 指向 page 指针数组， nr_pages 是页数。 page 指针数组的每个元素指向一个物
+	 * 理页的 page 实例
+	 */
 	struct page		**pages;
 	unsigned int		nr_pages;
+	/* 起始物理地址 */
 	phys_addr_t		phys_addr;
 	const void		*caller;
 };
 
+/* 代表虚拟内存区域。虚拟内存区域的范围是[va_start,va_end) */
 struct vmap_area {
 	unsigned long va_start;
 	unsigned long va_end;
+	/*
+	 * 如果设置了标志位 VM_VM_AREA ，表示成员 vm 指向一个 vm_struct 实例，即
+	 * vmap_area 实例关联一个 vm_strut 实例
+	 */
 	unsigned long flags;
+	/*
+	 * 用来把 vmap_area 实例加入根节点是 vmap_area_root 的红黑树中，借助红黑树可
+	 * 以根据虚拟地址快速找到 vmap_area 实例
+	 */
 	struct rb_node rb_node;         /* address sorted rbtree */
+	/*
+	 * 用来把 vmap_area 实例加入头节点是 vmap_area_list 的链表中，这条链表按虚拟
+	 * 地址从小到大排序
+	 */
 	struct list_head list;          /* address sorted list */
 	struct llist_node purge_list;    /* "lazy purge" list */
 	struct vm_struct *vm;

@@ -87,6 +87,11 @@
  * memblock data structures will be discarded after the system
  * initialization compltes.
  */
+/*
+ * memblock 原理
+ * memblock 分配器把所有内存添加到 memblock.memory 中，把分配出去的内存块添加到
+ * memblock.reserved 中。内存块类型中的内存块区域数组按起始物理地址从小到大排序。
+ */
 
 #ifndef CONFIG_NEED_MULTIPLE_NODES
 struct pglist_data __refdata contig_page_data;
@@ -222,6 +227,13 @@ __memblock_find_range_top_down(phys_addr_t start, phys_addr_t end,
 	phys_addr_t this_start, this_end, cand;
 	u64 i;
 
+	/*
+	 * 有两层循环，外层循环从高到低遍历 memblock.memory 的内存块区域数组；针对每
+	 * 个内存块区域 M1 ，执行内层循环，从高到低遍历 memblock.reserved 的内存块区
+	 * 域数组。针对每个内存块区域 M2 ，目标区域是内存块区域 M2 和前一个内存块区
+	 * 域之间的区域，如果目标区域属于内存块区域 M1 ，并且长度大于或等于请求分配
+	 * 的长度，那么可以从目标区域分配内存。
+	 */
 	for_each_free_mem_range_reverse(i, nid, flags, &this_start, &this_end,
 					NULL) {
 		this_start = clamp(this_start, start, end);
@@ -816,6 +828,7 @@ int __init_memblock memblock_remove(phys_addr_t base, phys_addr_t size)
  * Free boot memory block previously allocated by memblock_alloc_xx() API.
  * The freeing memory will not be released to the buddy allocator.
  */
+/* 释放内存，即只需要把内存块区域从 memblock.reserved 中删除 */
 int __init_memblock memblock_free(phys_addr_t base, phys_addr_t size)
 {
 	phys_addr_t end = base + size - 1;
@@ -1268,8 +1281,10 @@ static phys_addr_t __init memblock_alloc_range_nid(phys_addr_t size,
 		align = SMP_CACHE_BYTES;
 	}
 
+	/* 查找没有分配的内存块区域，默认从高地址向下分配 */
 	found = memblock_find_in_range_node(size, align, start, end, nid,
 					    flags);
+	/* 把内存块区域添加到 memblock.reserved 中 ，表示已经分配出去了 */
 	if (found && !memblock_reserve(found, size)) {
 		/*
 		 * The min_count is set to 0 so that memblock allocations are
@@ -1898,6 +1913,7 @@ static void __init __free_pages_memory(unsigned long start, unsigned long end)
 		while (start + (1UL << order) > end)
 			order--;
 
+		/* 按照 order 大小的方式把内存块添加内存到伙伴系统中 */
 		memblock_free_pages(pfn_to_page(start), start, order);
 
 		start += (1UL << order);
@@ -1919,6 +1935,7 @@ static unsigned long __init __free_memory_core(phys_addr_t start,
 	return end_pfn - start_pfn;
 }
 
+/* 添加物理页面到伙伴系统中 */
 static unsigned long __init free_low_memory_core_early(void)
 {
 	unsigned long count = 0;
@@ -1935,6 +1952,7 @@ static unsigned long __init free_low_memory_core_early(void)
 	 *  because in some case like Node0 doesn't have RAM installed
 	 *  low ram will be on Node1
 	 */
+	/* 遍历所有的内存块 */
 	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
 				NULL)
 		count += __free_memory_core(start, end);

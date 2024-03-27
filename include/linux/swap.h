@@ -110,16 +110,32 @@ static inline int current_is_kswapd(void)
 union swap_header {
 	struct {
 		char reserved[PAGE_SIZE - 10];
+		/*
+		 * Ideally, the header information will be a version 2 file format
+		 * because version 1 was limited to swap areas of just under 128MiB
+		 * for architectures with 4KiB page sizes like the x86
+		 */
 		char magic[10];			/* SWAP-SPACE or SWAPSPACE2 */
 	} magic;
 	struct {
 		char		bootbits[1024];	/* Space for disklabel etc. */
 		__u32		version;
+		/* the last usable page in the area */
 		__u32		last_page;
 		__u32		nr_badpages;
 		unsigned char	sws_uuid[16];
 		unsigned char	sws_volume[16];
+		/*
+		 * A disk section is usually about 512 bytes in size. The five fields
+		 * above make up 44 bytes, and the padding fills up the remaining 468
+		 * bytes to cover one sector.
+		 */
 		__u32		padding[117];
+		/*
+		 * used to store the indices of up to MAX_SWAP_BADPAGES number of bad
+		 * page slots. These slots are filled in by the mkswap system program
+		 * if the -c switch is specified to check the area.
+		 */
 		__u32		badpages[1];
 	} info;
 };
@@ -147,10 +163,22 @@ struct zone;
  *
  * We always assume that blocks are of size PAGE_SIZE.
  */
+/* 存储块描述符，用于描述多个连续的存储块，以及描述与块设备中扇区的映射关系 */
 struct swap_extent {
+	/*
+	 * 一个交换文件可能由多个 swap_extent 组成，需要用链表组织起来。如果元素很
+	 * 多，扫描会非常耗时。解决方案相对比较简单，在 swap_info_struct 中用成员
+	 * curr_swap_extent 保存指向上一次访问的 swap_extent ，每次新的搜索都从该
+	 * swap_extent 开始，因为通常是对连续的 slot 进行访问，所搜索的块通常会位于
+	 * 该 swap_extent 或下一个 swap_extent 。
+	 */
 	struct list_head list;
+    /* the index of the first page of the extent in the swap area */
 	pgoff_t start_page;
+    /* the length in pages of the extent */
 	pgoff_t nr_pages;
+    /* the starting disk sector number of the extent */
+	/* 注意，单位是页大小(磁盘中扇区号>>(12-9))，不是 sector 大小 */
 	sector_t start_block;
 };
 
@@ -158,6 +186,7 @@ struct swap_extent {
  * Max bad pages in the new format..
  */
 #define __swapoffset(x) ((unsigned long)&((union swap_header *)0)->x)
+/* == 637 ，相当于 (PAGE_SIZE - 1024 - 512 - 10) / 4 */
 #define MAX_SWAP_BADPAGES \
 	((__swapoffset(magic.magic) - __swapoffset(info.badpages)) / sizeof(int))
 
@@ -199,6 +228,12 @@ enum {
  * counter otherwise. The flags field determines if a cluster is free. This is
  * protected by swap_info_struct.lock.
  */
+/*
+ * 为了提高 swap 机制在 ssd 设备上的性能，内核引入了 swap_cluster_info 结构体。
+ * 每 SWAPFILE_CLUSTER 个连续的 slot 会组合成一个 swap_cluster_info ，内核在做内
+ * 存换出时，会以 swap_cluster_info 为单位查找空闲的 slot ，而不再遍历 swap_map ，
+ * 从而降低了锁竞争，也保证了 ssd 设备上的磨损均衡。
+ */
 struct swap_cluster_info {
 	spinlock_t lock;	/*
 				 * Protect swap_cluster_info fields
@@ -231,24 +266,44 @@ struct swap_cluster_list {
 /*
  * The in-memory structure used to track swap areas.
  */
+/* swap 分区的抽象。会定义成 swap_info 数组 */
 struct swap_info_struct {
 	unsigned long	flags;		/* SWP_USED etc: see above */
 	signed short	prio;		/* swap priority of this type */
 	struct plist_node list;		/* entry in swap_active_head */
 	signed char	type;		/* strange name for an index */
+	/* == pages + BAD pages + 1(head page) */
 	unsigned int	max;		/* extent of the swap_map */
+	/*
+	 * to track all page-sized slots. Each entry is a reference count of the
+	 * number of users of the slot, which happens in the case of a shared page
+	 * and is 0 when free. If the entry is SWAP_MAP_MAX, the page is permanently
+	 * reserved for that slot. It is unlikely, if not impossible, for this
+	 * condition to occur, but it exists to ensure the reference count does not
+	 * overflow. If the entry is SWAP_MAP_BAD, the slot is unusable.
+	 */
 	unsigned char *swap_map;	/* vmalloc'ed array of usage counts */
 	struct swap_cluster_info *cluster_info; /* cluster info. Only for SSD */
 	struct swap_cluster_list free_clusters; /* free clusters list */
+	/* 为了减少扫描整个交换区查找空闲 slot 的搜索时间 */
 	unsigned int lowest_bit;	/* index of first free in swap_map */
+	/* 当 slot 用完时，该值为 0 ，见 swap_range_alloc() */
 	unsigned int highest_bit;	/* index of last free in swap_map */
+	/* 不包含 SWAP_MAP_BAD 的 slots */
 	unsigned int pages;		/* total of usable pages of swap */
 	unsigned int inuse_pages;	/* number of those currently in use */
+	/* 指定了在交换区中接下来使用的 slot(在某个现存 cluster 中) 的 index */
 	unsigned int cluster_next;	/* likely index for next allocation */
+	/*
+	 * 表示当前聚集中仍然可用的 slot 个数。在消耗了这些空闲 slot 之后，则必须建立
+	 * 一个新的 cluster ，否则(如果没有足够空闲 slot 可用于建立新的 cluster)就只
+	 * 能进行细粒度分配了(即不再按 cluster 分配 slot)
+	 */
 	unsigned int cluster_nr;	/* countdown to next cluster search */
 	struct percpu_cluster __percpu *percpu_cluster; /* per cpu's swap location */
 	struct swap_extent *curr_swap_extent;
 	struct swap_extent first_swap_extent;
+	/* 指向交换文件或分区所在底层块设备的 block_device(可以是块设备，也可以是分区) */
 	struct block_device *bdev;	/* swap device or bdev of swap file */
 	struct file *swap_file;		/* seldom referenced */
 	unsigned int old_block_size;	/* seldom referenced */
@@ -369,6 +424,21 @@ extern int node_reclaim_mode;
 extern int sysctl_min_unmapped_ratio;
 extern int sysctl_min_slab_ratio;
 #else
+/*
+ * 如果 node_reclaim_mode == 0   或者 当前优先 zone 不允许内存回收，
+ * 则从下一个 zone 或 内存节点中分配内存；否则，从这个 zone 中进
+ * 行内存回收。
+ * 对于 NUMA 系统， node_reclaim_mode 受 /proc/sys/kernel/vm/zone_reclaim_mode
+ * 节点的控制。通常情况下， zone_reclaim_mode 模式是关闭的，即默认
+ * 关闭直接从本地 zone 中回收内存。
+ *
+ * 可以根据不同的场景来选择打开或者关闭：
+ * 打开的场景：如果应用场景对跨 NUMA 内存节点的访问延时比较敏感，可以打开
+ *             node_reclaim_mode 模式，这样页面分配器会优先从本地内存节点回收内存并
+ *             分配内存。
+ * 关闭的场景：如文件服务器中，系统需要大量的内容来作为内容缓存，即使内容缓存在远端
+ *             NUMA 节点上，读其中的内容也比直接读磁盘中的内容要快。
+ */
 #define node_reclaim_mode 0
 #endif
 
@@ -399,6 +469,7 @@ int generic_swapfile_activate(struct swap_info_struct *, struct file *,
 /* One swap address space for each 64M swap space */
 #define SWAP_ADDRESS_SPACE_SHIFT	14
 #define SWAP_ADDRESS_SPACE_PAGES	(1 << SWAP_ADDRESS_SPACE_SHIFT)
+/* 初始化见 init_swap_address_space() */
 extern struct address_space *swapper_spaces[];
 #define swap_address_space(entry)			    \
 	(&swapper_spaces[swp_type(entry)][swp_offset(entry) \

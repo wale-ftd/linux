@@ -68,6 +68,13 @@ void memcpy_flushcache(void *dst, const void *src, size_t cnt);
 
 #define memcpy(dst, src, len) __memcpy(dst, src, len)
 #define memmove(dst, src, len) __memmove(dst, src, len)
+/*
+ * 注意: arm64 对 memset 有一个优化，如果 memset 的值为 0 则会用 dc zva
+ * 来操作 cache 。通过 cache 来加速内存的清 0 ，但是这样会造成一个问题，
+ * 对于 device memory 是不能进行任何的 dc 操作的，这样会引起 aglinment
+ * fault 。所以，对于 device memory 是不能用 memset 进行操作的，要用
+ * memset_io 。
+ */
 #define memset(s, c, n) __memset(s, c, n)
 
 #ifndef __NO_FORTIFY

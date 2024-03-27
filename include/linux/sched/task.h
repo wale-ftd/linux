@@ -52,6 +52,7 @@ extern int copy_thread(unsigned long, unsigned long, unsigned long,
 
 /* Architectures that haven't opted into copy_thread_tls get the tls argument
  * via pt_regs, so ignore the tls argument passed via C. */
+/* 是这个 */
 static inline int copy_thread_tls(
 		unsigned long clone_flags, unsigned long sp, unsigned long arg,
 		struct task_struct *p, unsigned long tls)

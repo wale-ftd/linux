@@ -1895,6 +1895,7 @@ static void *get_partial_node(struct kmem_cache *s, struct kmem_cache_node *n,
 /*
  * Get a page from somewhere. Search in increasing NUMA distances.
  */
+/* 负责从其他内存节点借用部分空闲 slab */
 static void *get_any_partial(struct kmem_cache *s, gfp_t flags,
 		struct kmem_cache_cpu *c)
 {
@@ -1924,13 +1925,19 @@ static void *get_any_partial(struct kmem_cache *s, gfp_t flags,
 	 * may be expensive if we do it every time we are trying to find a slab
 	 * with available objects.
 	 */
+	/*
+	 * 如果远程节点反碎片比例是 0 ，或者当前处理器的时钟周期计数值除以 1024 的余
+	 * 数大于远程节点反碎片比例，那么不允许从其他节点借用部分空闲 slab
+	 */
 	if (!s->remote_node_defrag_ratio ||
 			get_cycles() % 1024 > s->remote_node_defrag_ratio)
 		return NULL;
 
 	do {
 		cpuset_mems_cookie = read_mems_allowed_begin();
+		/* 从当前进程的 NUMA 内存策略取内存节点 */
 		zonelist = node_zonelist(mempolicy_slab_node(), flags);
+		/* 从内存节点取备用区域列表 */
 		for_each_zone_zonelist(zone, z, zonelist, high_zoneidx) {
 			struct kmem_cache_node *n;
 
@@ -1938,6 +1945,11 @@ static void *get_any_partial(struct kmem_cache *s, gfp_t flags,
 
 			if (n && cpuset_zone_allowed(zone, flags) &&
 					n->nr_partial > s->min_partial) {
+			/*
+			 * cpuset 允许当前进程从目标内存节点分配内存，并且目标内存节点的部分
+			 * 空闲 slab 的数量大于最小部分空闲 slab 数量 kmem_cache.min_partial
+			 */
+				/* 从目标内存节点借用部分空闲 slab */
 				object = get_partial_node(s, n, c, flags);
 				if (object) {
 					/*
@@ -2825,6 +2837,10 @@ EXPORT_SYMBOL(kmem_cache_alloc_node_trace);
  * lock and free the item. If there is no additional partial page
  * handling required then we can return immediately.
  */
+/*
+ * 对于所有对象空闲的 slab ，如果内存节点的部分空闲 slab 的数量大于或等于最小部
+ * 分闲 slab 数量，那么直接释放，否则放在部分空闲 slab 链表的尾部
+ */
 static void __slab_free(struct kmem_cache *s, struct page *page,
 			void *head, void *tail, int cnt,
 			unsigned long addr)
@@ -3249,6 +3265,10 @@ static inline unsigned int slab_order(unsigned int size,
 	unsigned int order;
 
 	if (order_objects(min_order, size) > MAX_OBJS_PER_PAGE)
+		/*
+		 * slab 长度取(对象长度 * 每页最大对象数量)向上对齐到 2^n 页的长度，然后
+		 * 取一半
+		 */
 		return get_order(size * MAX_OBJS_PER_PAGE) - 1;
 
 	for (order = max(min_order, (unsigned int)get_order(min_objects * size));
@@ -3257,8 +3277,13 @@ static inline unsigned int slab_order(unsigned int size,
 		unsigned int slab_size = (unsigned int)PAGE_SIZE << order;
 		unsigned int rem;
 
+		/* 剩余长度 = (slab长度 - 保留长度)除以对象长度取余数 */
 		rem = slab_size % size;
 
+		/*
+		 * 剩余部分比例 = 剩余长度 / slab 长度
+		 * 如果剩余部分比例不超过上限(1 / fraction)，那么取这个阶数
+		 */
 		if (rem <= slab_size / fract_leftover)
 			break;
 	}
@@ -3286,6 +3311,7 @@ static inline int calculate_order(unsigned int size)
 	max_objects = order_objects(slub_max_order, size);
 	min_objects = min(min_objects, max_objects);
 
+	/* 尝试把多个对象放在一个 slab 中 */
 	while (min_objects > 1) {
 		unsigned int fraction;
 
@@ -3304,6 +3330,8 @@ static inline int calculate_order(unsigned int size)
 	 * We were unable to place multiple objects in a slab. Now
 	 * lets see if we can place a single object there.
 	 */
+	/* 如果不能把多个对象放在一个 slab 中，那么尝试把一个对象放在一个 slab 中 */
+	/* 先尝试最大阶数 slub_max_order */
 	order = slab_order(size, 1, slub_max_order, 1);
 	if (order <= slub_max_order)
 		return order;
@@ -3311,6 +3339,7 @@ static inline int calculate_order(unsigned int size)
 	/*
 	 * Doh this slab cannot be placed using slub_max_order.
 	 */
+	/* 再尝试最大阶数 MAX_ORDER */
 	order = slab_order(size, 1, MAX_ORDER, 1);
 	if (order < MAX_ORDER)
 		return order;

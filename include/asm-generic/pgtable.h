@@ -856,6 +856,7 @@ extern void untrack_pfn_moved(struct vm_area_struct *vma);
 #endif
 
 #ifdef __HAVE_COLOR_ZERO_PAGE
+/* 不是这个 */
 static inline int is_zero_pfn(unsigned long pfn)
 {
 	extern unsigned long zero_pfn;
@@ -866,6 +867,7 @@ static inline int is_zero_pfn(unsigned long pfn)
 #define my_zero_pfn(addr)	page_to_pfn(ZERO_PAGE(addr))
 
 #else
+/* 是这个 */
 static inline int is_zero_pfn(unsigned long pfn)
 {
 	extern unsigned long zero_pfn;
@@ -1024,6 +1026,7 @@ static inline int pmd_trans_unstable(pmd_t *pmd)
  * is the responsibility of the caller to distinguish between PROT_NONE
  * protections and NUMA hinting fault protections.
  */
+/* 不是这个 */
 static inline int pte_protnone(pte_t pte)
 {
 	return 0;
@@ -1159,6 +1162,10 @@ static inline bool arch_has_pfn_modify_check(void)
 #endif /* !__ASSEMBLY__ */
 
 #ifndef io_remap_pfn_range
+/*
+ * 把外设寄存器的物理地址映射到进程的用户虚拟地址空间，因此进程可以直接访问外
+ * 设寄存器
+ */
 #define io_remap_pfn_range remap_pfn_range
 #endif
 

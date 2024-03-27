@@ -142,6 +142,7 @@ do {									\
 #ifdef CONFIG_SMP
 
 #ifndef smp_store_mb
+/* 是这个 */
 #define smp_store_mb(var, value)  __smp_store_mb(var, value)
 #endif
 

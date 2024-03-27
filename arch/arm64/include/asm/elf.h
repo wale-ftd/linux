@@ -174,6 +174,10 @@ extern int arch_setup_additional_pages(struct linux_binprm *bprm,
 
 /* 1GB of VA */
 #ifdef CONFIG_COMPAT
+/*
+ * 对于 32 位应用为 0x7ff
+ * 对于 64 位应用为 0x3ffff
+ */
 #define STACK_RND_MASK			(test_thread_flag(TIF_32BIT) ? \
 						0x7ff >> (PAGE_SHIFT - 12) : \
 						0x3ffff >> (PAGE_SHIFT - 12))

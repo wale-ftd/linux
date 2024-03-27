@@ -24,20 +24,25 @@ struct worker_pool;
 struct worker {
 	/* on idle list while idle, on busy hash table while busy */
 	union {
+        /* 加入 worker_pool->idle_list */
 		struct list_head	entry;	/* L: while idle */
+        /* 加入 worker_pool->busy_hash */
 		struct hlist_node	hentry;	/* L: while busy */
 	};
 
 	struct work_struct	*current_work;	/* L: work being processed */
 	work_func_t		current_func;	/* L: current_work's fn */
 	struct pool_workqueue	*current_pwq; /* L: current_work's pwq */
+    /* 所有被调度并正准备执行的 work 都加入该链表中 */
 	struct list_head	scheduled;	/* L: scheduled works */
 
 	/* 64 bytes boundary on 64bit, 32 on 32bit */
 
+    /* 执行函数是 worker_thread() */
 	struct task_struct	*task;		/* I: worker task */
 	struct worker_pool	*pool;		/* A: the associated pool */
 						/* L: for rescuers */
+    /* 加入到 pool->workers 链表中 */
 	struct list_head	node;		/* A: anchored at pool->workers */
 						/* A: runs through worker->node */
 

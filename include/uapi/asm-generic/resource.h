@@ -24,6 +24,7 @@
 #endif
 
 #ifndef RLIMIT_NPROC
+/* 每个实际用户可拥有的最大子进程数 */
 # define RLIMIT_NPROC		6	/* max number of processes */
 #endif
 

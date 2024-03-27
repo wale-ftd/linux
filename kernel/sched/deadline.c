@@ -1668,6 +1668,10 @@ static void check_preempt_equal_dl(struct rq *rq, struct task_struct *p)
 static void check_preempt_curr_dl(struct rq *rq, struct task_struct *p,
 				  int flags)
 {
+	/*
+	 * 如果被唤醒的进程的绝对截止期限比当前进程的绝对截止期限小，那么给当前
+	 * 进程设置需要重新调度的标志。
+	 */
 	if (dl_entity_preempt(&p->dl, &rq->curr->dl)) {
 		resched_curr(rq);
 		return;
@@ -2394,6 +2398,10 @@ static void prio_changed_dl(struct rq *rq, struct task_struct *p,
 	}
 }
 
+/*
+ * 调度策略为 SCHED_DEADLINE ，属于这个类的进程优先级为 -1 。用于调度有严格时
+ * 间要求的实时进程，如视频编/解码等
+ */
 const struct sched_class dl_sched_class = {
 	.next			= &rt_sched_class,
 	.enqueue_task		= enqueue_task_dl,

@@ -4,11 +4,34 @@
 
 #include <linux/rculist.h>
 
+/*
+ * Linux 是多用户操作系统，用户登录时会创建一个会话，用户启动的所有进程都属于这
+ * 个会话。登录 shell 是会话首进程，它所使用的终端就是会话的控制终端，会话首进程
+ * 通常也被称为控制进程。当用户退出登录时，所有属于这个会话的进程都将被终止。
+ */
 enum pid_type
 {
 	PIDTYPE_PID,
+	/*
+	 * 指向 thread group leader 的 pid 结构体。
+	 * 多个共享用户虚拟地址空间的进程组成一个线程组，线程组中的主进程称为组长，
+	 * 线程组标识符就是组长的进程标识符。当调用系统调用 clone 传入标志
+	 * CLONE_THREAD 以创建新进程时，新进程和当前进程属于一个线程组。
+	 */
 	PIDTYPE_TGID,
+	/*
+	 * 指向 process group leader 的 pid 结构体。
+	 * 多个进程可以组成一个进程组，进程组标识符是组长的进程标识符。进程可以使用
+	 * 系统调用 setpgid 创建或者加入一个进程组。会话和进程组被设计用来支持 shell
+	 * 作业控制， shell 为执行单一命令或者管道的进程创建一个进程组。进程组简化了
+	 * 向进程组的所有成员发送信号的操作。
+	 */
 	PIDTYPE_PGID,
+	/*
+	 * 指向会话首进程的 pid 结构体。
+	 * 多个进程组可以组成一个会话。当进程调用系统调用 setsid 的时候，创建一个新
+	 * 的会话，会话标识符是该进程的进程标识符。创建会话的进程是会话的首进程。
+	 */
 	PIDTYPE_SID,
 	PIDTYPE_MAX,
 };
@@ -56,11 +79,14 @@ struct upid {
 
 struct pid
 {
+	/* 引用计数 */
 	atomic_t count;
+	/* 进程所属的进程号命名空间的层次，从 0 开始 */
 	unsigned int level;
 	/* lists of tasks that use this pid */
 	struct hlist_head tasks[PIDTYPE_MAX];
 	struct rcu_head rcu;
+	/* 数组 numbers 的元素个数是成员 level 的值加上 1 */
 	struct upid numbers[1];
 };
 

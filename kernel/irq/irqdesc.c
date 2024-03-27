@@ -132,6 +132,7 @@ EXPORT_SYMBOL_GPL(nr_irqs);
 static DEFINE_MUTEX(sparse_irq_lock);
 static DECLARE_BITMAP(allocated_irqs, IRQ_BITMAP_BITS);
 
+/* 有定义 */
 #ifdef CONFIG_SPARSE_IRQ
 
 static void irq_kobj_release(struct kobject *kobj);
@@ -333,6 +334,7 @@ static void irq_insert_desc(unsigned int irq, struct irq_desc *desc)
 	radix_tree_insert(&irq_desc_tree, irq, desc);
 }
 
+/* 是这个 */
 struct irq_desc *irq_to_desc(unsigned int irq)
 {
 	return radix_tree_lookup(&irq_desc_tree, irq);

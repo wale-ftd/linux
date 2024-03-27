@@ -2663,6 +2663,7 @@ static int mpage_prepare_extent_to_map(struct mpage_da_data *mpd)
 		if (nr_pages == 0)
 			goto out;
 
+        /* 寻找脏页 */
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 
@@ -2707,6 +2708,7 @@ static int mpage_prepare_extent_to_map(struct mpage_da_data *mpd)
 			lblk = ((ext4_lblk_t)page->index) <<
 				(PAGE_SHIFT - blkbits);
 			head = page_buffers(page);
+            /* 设置 PG_Writeback 标志位 */
 			err = mpage_process_page_bufs(mpd, head, head, lblk);
 			if (err <= 0)
 				goto out;

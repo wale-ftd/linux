@@ -68,6 +68,7 @@ struct task_group;
  */
 
 /* Used in tsk->state: */
+/* 包含 running 和 runnable */
 #define TASK_RUNNING			0x0000
 #define TASK_INTERRUPTIBLE		0x0001
 #define TASK_UNINTERRUPTIBLE		0x0002
@@ -185,6 +186,7 @@ struct task_group;
 #define __set_current_state(state_value)				\
 	current->state = (state_value)
 
+/* 是这个 */
 #define set_current_state(state_value)					\
 	smp_store_mb(current->state, (state_value))
 
@@ -312,7 +314,9 @@ struct sched_info {
 # define SCHED_FIXEDPOINT_SCALE		(1L << SCHED_FIXEDPOINT_SHIFT)
 
 struct load_weight {
+    /* 等于 sched_prio_to_weight[prio] */
 	unsigned long			weight;
+    /* 等于 sched_prio_to_wmult[prio] */
 	u32				inv_weight;
 };
 
@@ -396,14 +400,49 @@ struct util_est {
  * Then it is the load_weight's responsibility to consider overflow
  * issues.
  */
+/* 用于描述 sched_entity/cfs_rq/rt_rq/dl_rq 的负载信息 */
 struct sched_avg {
+    /* 上一次更新的时间点，用于计算时间间隔。单位是 ns ，且能被 1024 整除 */
 	u64				last_update_time;
+    /*
+     * 对于 sched_entity : 该实体整个历史上的可运行时间(包含 running 和
+     *                     runnable)总和(整个历史上的原始 CPU 负载在衰减
+     *                     因子作用下的总和)，见 accumulate_sum()
+     * 对于 cfs_rq: 该队列上所有实体的 weight*load_sum 总和
+     */
 	u64				load_sum;
+	/* 对于 cfs_rq: load_sum 中仅由 runnable 进程贡献的部分 */
 	u64				runnable_load_sum;
+	/*
+	 * 对于 sched_entity: 与 load_sum 类似，区别是 util_sum 只统计 se 真
+                          正运行的时间(不包括 runnable 的时间)
+     * 对于 cfs_rq: 该队列上所有实体的 util_sum 总和
+     */
 	u32				util_sum;
+    /*
+     * 存放上一次更新时，不能凑成一个周期(1024us)的多余时间(accumulate_sum()
+     * 注释里没写出来的 d0(1024-d1) ，类似于当前更新周期的 d3)。单位是 us
+     */
 	u32				period_contrib;
+    /*
+     * 对于 sched_entity : 该实体的平均 CPU 负载(整个历史上的原始 CPU 负载
+                           在衰减因子与负荷权重共同作用下的结果)
+     * 对于 cfs_rq: 该队列上所有实体的 load_avg 总和
+     */
 	unsigned long			load_avg;
+    /*
+     * 对 cfs_rq: load_avg 中仅由 runnable 进程贡献的部分，用于跟踪该队列中
+     *            的总量化负载。
+     * 在 SMP 负载均衡调度器中用于衡量 CPU 是否繁忙。
+     */
 	unsigned long			runnable_load_avg;
+	/*
+	 * 实际算力。用于 EAS 和 CPU 调频。
+	 * 对于 sched_entity : 与 load_avg 类似，区别是 util_avg 只统计 se 真
+	 *                     正运行的时间并且不需要根据负荷权重进行缩放
+     * 对于 cfs_rq: 该队列上所有实体的 util_avg 总和
+	 *
+	 */
 	unsigned long			util_avg;
 	struct util_est			util_est;
 } ____cacheline_aligned;
@@ -444,24 +483,50 @@ struct sched_statistics {
 #endif
 };
 
+/* 可表示 task ，也可以表示 task group */
 struct sched_entity {
 	/* For load-balancing: */
 	struct load_weight		load;
+    /* 表示进程在可运行状态的权重，这个值等于进程的权重 */
 	unsigned long			runnable_weight;
+    /*
+     * 处于 runnable 的调度实体作为一个节点插入 CFS 的红黑树里，处于 running 的
+     * se 不在 CFS 的红黑树里(见 set_next_entity())
+     */
 	struct rb_node			run_node;
+    /*
+     * 在就绪队列里有一个链表 rq.cfs_tasks ，调度实体添加到就绪队列之后会添加到
+     * 该链表中
+     */
 	struct list_head		group_node;
+    /*
+     * 表示 se 是否在就绪队列中接受调度。
+     * 进程进入就绪队列时(enqueue_entity())， on_rq 会被设置为 1 。当进程出于睡
+     * 眠等原因退出就绪队列时(dequeue_entity())， on_rq 会被清零。
+     * 注意和 task_struct.on_rq 的区别，一般是先设置 se.on_rq ，再设置
+     * task_struct.on_rq
+     */
 	unsigned int			on_rq;
 
+    /* 起始运行时间，这是真实时间。用于计算进程真实运行时间 */
 	u64				exec_start;
+    /* 总运行时间，这是真实时间 */
 	u64				sum_exec_runtime;
+	/*
+	 * 计算原理：见 update_curr()
+	 * 更新时机：创建新进程，加入就绪队列、调度节拍等
+	 */
 	u64				vruntime;
+	/* 上一次统计调度实体运行的总时间 */
 	u64				prev_sum_exec_runtime;
 
+	/* 该调度实体发生迁移的次数 */
 	u64				nr_migrations;
 
 	struct sched_statistics		statistics;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
+	/* 参考 https://blog.csdn.net/feelabclihu/article/details/128586905 */
 	int				depth;
 	struct sched_entity		*parent;
 	/* rq on which this entity is (to be) queued: */
@@ -590,6 +655,13 @@ struct wake_q_node {
 };
 
 struct task_struct {
+/*
+ * ARM64 有定义。
+ * thread_info 结构体作为进程描述符的第一个成员，它的地址和进程描述符的地址相
+ * 同。当进程在内核模式运行时， ARM64 架构的内核使用用户栈指针寄存器 SP_EL0
+ * 存放当前进程的 thread_info 结构体的地址，通过这个寄存器既可以得到 thread_info
+ * 结构体的地址，也可以得到进程描述符的地址。见 current 的定义。
+ */
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
 	 * For reasons of header soup (see current_thread_info()), this
@@ -606,6 +678,7 @@ struct task_struct {
 	 */
 	randomized_struct_fields_start
 
+    /* 进程内核栈，见 alloc_thread_stack_node() */
 	void				*stack;
 	atomic_t			usage;
 	/* Per task flags (PF_*), defined further below: */
@@ -614,13 +687,21 @@ struct task_struct {
 
 #ifdef CONFIG_SMP
 	struct llist_node		wake_entry;
+    /*
+     * 表示进程是否正在运行。会在 Mutex 模块和读写信号量的乐观自旋等待机制
+     * 中用到。在 prepare_task() 里设置，在 finish_task()清除
+     */
 	int				on_cpu;
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/* Current CPU: */
+	/* 表示进程正运行在哪个 CPU 上 */
 	unsigned int			cpu;
 #endif
+    /* 用于 wake affine 特性 */
 	unsigned int			wakee_flips;
+    /* 用于记录上一次 wake_flips 的时间 */
 	unsigned long			wakee_flip_decay_ts;
+    /* 表示上一次唤醒的是哪个进程 */
 	struct task_struct		*last_wakee;
 
 	/*
@@ -631,16 +712,39 @@ struct task_struct {
 	 * used CPU that may be idle.
 	 */
 	int				recent_used_cpu;
+    /* 表示进程上一次运行在哪个 CPU 上 */
 	int				wake_cpu;
 #endif
+    /*
+     * 表示进程的调度状态，即在 rq 里的状态。如 TASK_ON_RQ_QUEUED
+     * 注意和 se.on_rq 的区别，一般是先设置 se.on_rq ，再设置 task_struct.on_rq
+     */
 	int				on_rq;
 
+    /*
+     * 进程动态优先级，是调度类考虑的优先级。有些情况下需要暂时提高进程优先级，
+     * 如对于实时互斥锁等
+     */
 	int				prio;
+    /*
+     * 静态优先级，在进程启动时分配，不会随着时间而改变，用户层可以通过 nice()
+     * 或 sched_setscheduler()等系统调用来修改该值。内核不存储 nice 值，可以通
+     * 过 NICE_TO_PRIO()宏把 nice 值转换成 static_prio
+     */
 	int				static_prio;
+    /*
+     * 基于 static_prio 和调度策略计算出来的优先级，在创建进程时会继承父进程的
+     * normal_prio 。详见 effective_prio()
+     * 对于 deadline 进程，为 -1 。
+     * 对于实时进程，会根据 rt_priority 重新计算 normal_prio ，范围是 0 ~ 99。
+     * 对于普通进程来说， normal_prio 等同于 static_prio ，范围是 100 ~ 139；
+     */
 	int				normal_prio;
+    /* rt_priority[99, 0] -> normal_prio[0, 99] */
 	unsigned int			rt_priority;
 
 	const struct sched_class	*sched_class;
+    /* 普通进程调度实体 */
 	struct sched_entity		se;
 	struct sched_rt_entity		rt;
 #ifdef CONFIG_CGROUP_SCHED
@@ -657,8 +761,14 @@ struct task_struct {
 	unsigned int			btrace_seq;
 #endif
 
+    /*
+     * Linux 把相同的调度策略抽象成调度类。如 fair_policy()。相关系统调用有
+     * sched_setscheduler()/sched_getscheduler()/sched_setparam()/sched_getparam()
+     */
 	unsigned int			policy;
+	/* 进程允许运行的 CPU 个数 */
 	int				nr_cpus_allowed;
+	/* 进程允许运行的 CPU 位图 */
 	cpumask_t			cpus_allowed;
 
 #ifdef CONFIG_PREEMPT_RCU
@@ -684,6 +794,11 @@ struct task_struct {
 	struct rb_node			pushable_dl_tasks;
 #endif
 
+    /*
+     * 对于非内核线程， mm == active_mm 。
+     * 对于内核线程， mm 等于 NULL ，但出于进程调度的需要，需要借用一个进
+     * 程的地址空间，因此有了 active_mm ，用来指向借用的进程的地址空间。
+     */
 	struct mm_struct		*mm;
 	struct mm_struct		*active_mm;
 
@@ -744,6 +859,7 @@ struct task_struct {
 	struct restart_block		restart_block;
 
 	pid_t				pid;
+	/* 见 thread_group 成员的注释 */
 	pid_t				tgid;
 
 #ifdef CONFIG_STACKPROTECTOR
@@ -760,6 +876,10 @@ struct task_struct {
 	struct task_struct __rcu	*real_parent;
 
 	/* Recipient of SIGCHLD, wait4() reports: */
+	/*
+	 * 如果进程被另一个进程(通常是调试器)使用系统调用 ptrace 跟踪，那么父进程
+	 * 是跟踪进程，否则和 real_parent 相同
+	 */
 	struct task_struct __rcu	*parent;
 
 	/*
@@ -767,6 +887,7 @@ struct task_struct {
 	 */
 	struct list_head		children;
 	struct list_head		sibling;
+	/* 见 thread_group 成员的注释 */
 	struct task_struct		*group_leader;
 
 	/*
@@ -781,6 +902,12 @@ struct task_struct {
 	/* PID/PID hash table linkage. */
 	struct pid			*thread_pid;
 	struct hlist_node		pid_links[PIDTYPE_MAX];
+	/*
+	 * 一个线程组的所有线程链接在一条线程链表上，头节点是组长的成员
+	 * thread_group ，链表节点是线程的成员 thread_group 。线程的成员
+	 * group_leader 指向组长的进程描述符，成员 tgid 是线程组标识符，成员 pid
+	 * 存放自己的进程标识符。
+	 */
 	struct list_head		thread_group;
 	struct list_head		thread_node;
 
@@ -835,6 +962,10 @@ struct task_struct {
 	const struct cred __rcu		*real_cred;
 
 	/* Effective (overridable) subjective task credentials (COW): */
+	/*
+	 * real_cred 指向主体和真实客体证书， cred 指向有效客体证书。通常情况下，
+	 * cred 和 real_cred 指向相同的证书，但是 cred 可以被临时改变
+	 */
 	const struct cred __rcu		*cred;
 
 	/*
@@ -863,9 +994,14 @@ struct task_struct {
 	struct files_struct		*files;
 
 	/* Namespaces: */
+	/*
+	 * 和虚拟机相比，容器是一种轻量级的虚拟化技术，直接使用宿主机的内核，
+	 * 使用命名空间隔离资源
+	 */
 	struct nsproxy			*nsproxy;
 
 	/* Signal handlers: */
+	/* signal_struct 比较混乱，里面包含很多和信号无关的成员 */
 	struct signal_struct		*signal;
 	struct sighand_struct		*sighand;
 	sigset_t			blocked;
@@ -1209,6 +1345,7 @@ struct task_struct {
 	randomized_struct_fields_end
 
 	/* CPU-specific state of this task: */
+    /* 保存和具体架构相关的信息 */
 	struct thread_struct		thread;
 
 	/*
@@ -1376,16 +1513,28 @@ extern struct pid *cad_pid;
 /*
  * Per process flags
  */
+/*
+ * 处于 idle 状态。 linux-4.10 新增的标志，是为了解决空闲注入驱动的一些问题。
+ * 从此之后，系统的空闲进程不仅包括进程 0 ，还可能包括设置了 PF_IDLE 标志位
+ * 的进程
+ */
 #define PF_IDLE			0x00000002	/* I am an IDLE thread */
 #define PF_EXITING		0x00000004	/* Getting shut down */
 #define PF_EXITPIDONE		0x00000008	/* PI exit done on shut down */
 #define PF_VCPU			0x00000010	/* I'm a virtual CPU */
+/* 进程调度会对 workqueue worker 做特殊处理 */
 #define PF_WQ_WORKER		0x00000020	/* I'm a workqueue worker */
 #define PF_FORKNOEXEC		0x00000040	/* Forked but didn't exec */
 #define PF_MCE_PROCESS		0x00000080      /* Process policy on mce errors */
 #define PF_SUPERPRIV		0x00000100	/* Used super-user privileges */
 #define PF_DUMPCORE		0x00000200	/* Dumped core */
 #define PF_SIGNALED		0x00000400	/* Killed by a signal */
+/*
+ * 允许设置 PF_MEMALLOC 的线程使用系统预留的内存，即不用考虑 zone 的水位。 mm
+ * 子系统以外的子系统不应该使用这个标志位，使用的典型例子是 kswapd 。
+ * PF_MEMALLOC 也可以理解为"给我少量系统保留内存使用，我可以释放更多的内存"。
+ * 类似的有 __GFP_MEMALLOC 。
+ */
 #define PF_MEMALLOC		0x00000800	/* Allocating memory */
 #define PF_NPROC_EXCEEDED	0x00001000	/* set_user() noticed that RLIMIT_NPROC was exceeded */
 #define PF_USED_MATH		0x00002000	/* If unset the fpu must be initialized before use */
@@ -1398,6 +1547,7 @@ extern struct pid *cad_pid;
 #define PF_LESS_THROTTLE	0x00100000	/* Throttle me less: I clean memory */
 #define PF_KTHREAD		0x00200000	/* I am a kernel thread */
 #define PF_RANDOMIZE		0x00400000	/* Randomize virtual address space */
+/* 允许写交换分区 */
 #define PF_SWAPWRITE		0x00800000	/* Allowed to write to swap */
 #define PF_MEMSTALL		0x01000000	/* Stalled due to lack of memory */
 #define PF_UMH			0x02000000	/* I'm an Usermodehelper process */
@@ -1700,6 +1850,13 @@ extern int _cond_resched(void);
 static inline int _cond_resched(void) { return 0; }
 #endif
 
+/*
+ * 判断当前进程是否需要调度，通常在 while 循环中添加这个函数，从而优化系统
+ * 延迟。
+ * 在非抢占式内核中，函数 cond_resched()判断当前进程是否设置了需要重新调度
+ * 的标志，如果设置了，就调度进程；在抢占式内核中，函数 cond_resched()是空
+ * 函数，没有作用。
+ */
 #define cond_resched() ({			\
 	___might_sleep(__FILE__, __LINE__, 0);	\
 	_cond_resched();			\

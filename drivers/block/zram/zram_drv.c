@@ -1641,6 +1641,21 @@ static void zram_slot_free_notify(struct block_device *bdev,
 	zram_slot_unlock(zram, index);
 }
 
+/*
+ * 4.19 版本
+ * <ffffff9cc96cda74> zram_rw_page+0x74/0xf8
+ * <ffffff9cc9241478> bdev_read_page+0x7c/0xd0
+ * <ffffff9cc91c5aa0> swap_readpage+0x64/0x32c
+ * <ffffff9cc91c6d2c> swap_cluster_readahead+0x178/0x294
+ * <ffffff9cc91c6f9c> swapin_readahead+0x58/0x3c8
+ * <ffffff9cc91b03cc> do_swap_page+0x134/0x6e0
+ * <ffffff9cc91b1784> handle_pte_fault+0x114/0xcac
+ * <ffffff9cc91b154c> __handle_speculative_fault+0x228/0x34c
+ * <ffffff9cc8ffd4f8> do_page_fault+0x1f0/0x51c
+ * <ffffff9cc8ffd2f4> do_translation_fault+0x2c/0x40
+ * <ffffff9cc8e817cc> do_mem_abort+0x70/0x140
+ * <ffffff9cc8e84654> el0_da+0x1c/0x20
+ */
 static int zram_rw_page(struct block_device *bdev, sector_t sector,
 		       struct page *page, unsigned int op)
 {

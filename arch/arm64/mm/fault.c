@@ -52,7 +52,9 @@
 struct fault_info {
 	int	(*fn)(unsigned long addr, unsigned int esr,
 		      struct pt_regs *regs);
+    /* 处理失败时内核要发送的信号类型 */
 	int	sig;
+    /* 处理失败时内核要发送的信号编码 */
 	int	code;
 	const char *name;
 };
@@ -133,6 +135,7 @@ static void mem_abort_decode(unsigned int esr)
 		data_abort_decode(esr);
 }
 
+/* 判断异常地址是否发生在用户空间 */
 static inline bool is_ttbr0_addr(unsigned long addr)
 {
 	/* entry assembly clears tags for TTBR0 addrs */
@@ -236,6 +239,10 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 	 * be set to the most permissive (lowest value) of *ptep and entry
 	 * (calculated as: a & b == ~(~a | ~b)).
 	 */
+	/*
+	 * 对 PTE_RDONLY 位做必要的反转，确保不会覆盖硬件脏状态管理机制修改后的
+	 * PTE_RDONLY 位
+	 */
 	pte_val(entry) ^= PTE_RDONLY;
 	pteval = pte_val(pte);
 	do {
@@ -243,6 +250,7 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 		pteval ^= PTE_RDONLY;
 		pteval |= pte_val(entry);
 		pteval ^= PTE_RDONLY;
+        /* 采用 cmpxchg 原子操作函数来修改 PTE */
 		pteval = cmpxchg_relaxed(&pte_val(*ptep), old_pteval, pteval);
 	} while (pteval != old_pteval);
 
@@ -255,6 +263,7 @@ static bool is_el1_instruction_abort(unsigned int esr)
 	return ESR_ELx_EC(esr) == ESR_ELx_EC_IABT_CUR;
 }
 
+/* 判断访问权限问题是否发生在 EL1 中 */
 static inline bool is_el1_permission_fault(unsigned long addr, unsigned int esr,
 					   struct pt_regs *regs)
 {
@@ -310,6 +319,7 @@ static void __do_kernel_fault(unsigned long addr, unsigned int esr,
 	} else if (addr < PAGE_SIZE) {
 		msg = "NULL pointer dereference";
 	} else {
+    /* MMU 不能索引物理地址 */
 		msg = "paging request";
 	}
 
@@ -390,7 +400,9 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 	}
 }
 
+/* 错误的映射 */
 #define VM_FAULT_BADMAP		0x010000
+/* 错误的访问 */
 #define VM_FAULT_BADACCESS	0x020000
 
 static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
@@ -405,6 +417,7 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 	if (unlikely(!vma))
 		goto out;
 	if (unlikely(vma->vm_start > addr))
+    /* 特殊情况：判断是否可以把 VMA 的地址扩展到 addr 。如进程用户态的栈 */
 		goto check_stack;
 
 	/*
@@ -416,7 +429,13 @@ good_area:
 	 * Check that the permissions on the VMA allow for the fault which
 	 * occurred.
 	 */
+	/* 判断 VMA 的属性 */
 	if (!(vma->vm_flags & vm_flags)) {
+	/*
+	 * 如在 do_page_fault()中通过 ESR 的 WnR 可知，这次异常是写内存导致的，
+	 * 若这个 VMA 的属性 vma->vm_flags 不具有可写属性 VM_WRITE ，那么说明
+	 * 这是一个错误的访问
+	 */
 		fault = VM_FAULT_BADACCESS;
 		goto out;
 	}
@@ -456,18 +475,25 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 * the fault.
 	 */
 	if (faulthandler_disabled() || !mm)
+        /*
+         * 说明发生异常时处理器在内核态执行，正在使用内核空间的虚拟地址空间，
+         * 所以不用处理与进程地址空间相关的部分。
+         */
 		goto no_context;
 
 	if (user_mode(regs))
 		mm_flags |= FAULT_FLAG_USER;
 
 	if (is_el0_instruction_abort(esr)) {
+        /* 异常是 EL0 中的指令异常，说明这个进程地址空间是具有可执行权限的 */
 		vm_flags = VM_EXEC;
 	} else if ((esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM)) {
+	    /* 是写导致的异常错误，且不是调整缓存导致的异常错误 */
 		vm_flags = VM_WRITE;
 		mm_flags |= FAULT_FLAG_WRITE;
 	}
 
+    /* 处理比较少见的特殊情况 */
 	if (is_ttbr0_addr(addr) && is_el1_permission_fault(addr, esr, regs)) {
 		/* regs->orig_addr_limit may be 0 if we entered from EL0 */
 		if (regs->orig_addr_limit == KERNEL_DS)
@@ -479,16 +505,31 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 					 addr, esr, regs);
 
 		if (!search_exception_tables(regs->pc))
+        /* 在异常表找不到合适的处理函数 */
 			die_kernel_fault("access to user memory outside uaccess routines",
 					 addr, esr, regs);
 	}
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, addr);
 
+    /* 接下来，检查由进程地址空间而引发的缺页异常 */
+
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
 	 * validly references user space from well defined areas of the code,
 	 * we can bug out early if this is from code which shouldn't.
+	 */
+	/*
+	 * 为什么可能会获取不到锁呢？因为可能其他线程已经提前获取了该进程的写
+	 * 者类型的锁，如调用 brk 申请堆空间，调用 mmap()接口函数进行内存映射
+	 * 等操作。 mm->mmap_sem 锁被别人占用时要区分两种情况：
+	 *   1. 发生在用户空间。发生在用户空间的情况下可以调用 down_read()来睡
+	 *      眠，以等待锁持有者释放该锁。
+	 *   2. 发生在内核空间。内核一般不会随意访问用户地址空间，只有少数几个
+	 *      函数会代表内核访问用户地址空间，如 copy_to_user()，为了防止访问
+	 *      错误的地址空间，为每处代码设置了出错修正地址(见异常表)。因此，
+	 *      当发生在内核空间并且在异常表没有查询到该地址时，跳转到
+	 *      no_context 标签处的 __do_kernel_fault()函数。
 	 */
 	if (!down_read_trylock(&mm->mmap_sem)) {
 		if (!user_mode(regs) && !search_exception_tables(regs->pc))
@@ -741,6 +782,7 @@ int handle_guest_sea(phys_addr_t addr, unsigned int esr)
 asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 					 struct pt_regs *regs)
 {
+    /* 为软件快速查询和处理 DFSC ，定义了一个 fault_info 表 */
 	const struct fault_info *inf = esr_to_fault_info(esr);
 
 	if (!inf->fn(addr, esr, regs))

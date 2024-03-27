@@ -22,6 +22,7 @@
 
 #include "internals.h"
 
+/* 有定义 */
 #ifdef CONFIG_IRQ_FORCED_THREADING
 __read_mostly bool force_irqthreads;
 EXPORT_SYMBOL_GPL(force_irqthreads);
@@ -96,6 +97,10 @@ EXPORT_SYMBOL(synchronize_hardirq);
  *	holding a resource the IRQ handler may need you will deadlock.
  *
  *	This function may be called - with care - from IRQ context.
+ */
+/*
+ * 例如 disable_irq()会调用 synchronize_irq()等待所有被唤醒的中断线程执行完
+ * 毕，然后才会真正地关闭中断
  */
 void synchronize_irq(unsigned int irq)
 {
@@ -827,6 +832,10 @@ static void irq_finalize_oneshot(struct irq_desc *desc,
 	if (!(desc->istate & IRQS_ONESHOT) ||
 	    action->handler == irq_forced_secondary_handler)
 		return;
+	/*
+	 * 对于 IRQS_ONESHOT ，必须保证所有的 thread_fn 执行完成才能重新打开
+	 * 中断源(unmask 操作)
+	 */
 again:
 	chip_bus_lock(desc);
 	raw_spin_lock_irq(&desc->lock);
@@ -864,6 +873,10 @@ again:
 
 	if (!desc->threads_oneshot && !irqd_irq_disabled(&desc->irq_data) &&
 	    irqd_irq_masked(&desc->irq_data))
+	/*
+	 * 该中断源的所有 action 都执行完毕时， threads_oneshot 应为 0 ，这时
+	 * 可以销毁该中断源的中断屏蔽，从而使能该中断源
+	 */
 		unmask_threaded_irq(desc);
 
 out_unlock:
@@ -948,6 +961,7 @@ static irqreturn_t irq_thread_fn(struct irq_desc *desc,
 {
 	irqreturn_t ret;
 
+	/* 执行注册中断时的 thread_fn()函数 */
 	ret = action->thread_fn(action->irq, action->dev_id);
 	if (ret == IRQ_HANDLED)
 		atomic_inc(&desc->threads_handled);
@@ -959,6 +973,10 @@ static irqreturn_t irq_thread_fn(struct irq_desc *desc,
 static void wake_threads_waitq(struct irq_desc *desc)
 {
 	if (atomic_dec_and_test(&desc->threads_active))
+	/*
+	 * 当中断线程都执行完毕时，才能唤醒在 wait_for_threads 中睡眠的进程。有
+	 * 哪些进程会睡眠在些呢？见 synchronize_irq()
+	 */
 		wake_up(&desc->wait_for_threads);
 }
 
@@ -1023,6 +1041,7 @@ static int irq_thread(void *data)
 
 	irq_thread_check_affinity(desc, action);
 
+	/* 等待 IRQTF_RUNTHREAD 置位 */
 	while (!irq_wait_for_interrupt(action)) {
 		irqreturn_t action_ret;
 
@@ -1148,6 +1167,7 @@ setup_irq_thread(struct irqaction *new, unsigned int irq, bool secondary)
 	if (IS_ERR(t))
 		return PTR_ERR(t);
 
+	/* 设置成 rt 线程 */
 	sched_setscheduler_nocheck(t, SCHED_FIFO, &param);
 
 	/*

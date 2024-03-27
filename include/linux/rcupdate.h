@@ -379,6 +379,10 @@ static inline void rcu_preempt_sleep_check(void) { }
  * please be careful when making changes to rcu_assign_pointer() and the
  * other macros that it invokes.
  */
+/*
+ * 因为 rcu_assign_pointer() 和 rcu_dereference() 有 p 的地址依赖(ARM64 硬件保序)，
+ * 所以在 rcu_dereference() 不需要 smp_load_acquire()
+ */
 #define rcu_assign_pointer(p, v)					      \
 ({									      \
 	uintptr_t _r_a_p__v = (uintptr_t)(v);				      \

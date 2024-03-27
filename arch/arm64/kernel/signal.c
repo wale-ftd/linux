@@ -912,6 +912,11 @@ static void do_signal(struct pt_regs *regs)
 	restore_saved_sigmask();
 }
 
+/*
+ * 判断当前进程的进程描述符的成员 thread_info.flags 有没有设置需要重新调
+ * 度的标志位 _TIF_NEED_RESCHED ，如果设置了，那么调用函数 schedule()以
+ * 调度进程。
+ */
 asmlinkage void do_notify_resume(struct pt_regs *regs,
 				 unsigned long thread_flags)
 {

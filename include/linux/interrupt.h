@@ -113,11 +113,13 @@ struct irqaction {
 	void __percpu		*percpu_dev_id;
 	struct irqaction	*next;
 	irq_handler_t		thread_fn;
+	/* == irq_thread() */
 	struct task_struct	*thread;
 	struct irqaction	*secondary;
 	unsigned int		irq;
 	unsigned int		flags;
 	unsigned long		thread_flags;
+	/* 在共享中断中，每一个 action 由一位来表示 */
 	unsigned long		thread_mask;
 	const char		*name;
 	struct proc_dir_entry	*dir;
@@ -557,22 +559,28 @@ static inline struct task_struct *this_cpu_ksoftirqd(void)
 
 struct tasklet_struct
 {
+	/* 多个 tasklet 串成一个单链表 */
 	struct tasklet_struct *next;
+	/* 如 TASKLET_STATE_RUN */
 	unsigned long state;
+	/* 若为 0 ，表示 tasklet 处于激活状态；若不为 0 ，表示被禁止，不允许执行 */
 	atomic_t count;
 	void (*func)(unsigned long);
 	unsigned long data;
 };
 
+/* tasklet 处于激活状态 */
 #define DECLARE_TASKLET(name, func, data) \
 struct tasklet_struct name = { NULL, 0, ATOMIC_INIT(0), func, data }
 
+/* tasklet 处于被禁止状态 */
 #define DECLARE_TASKLET_DISABLED(name, func, data) \
 struct tasklet_struct name = { NULL, 0, ATOMIC_INIT(1), func, data }
 
 
 enum
 {
+	/* tasklet 已经被挂载到 tasklet 链表中，但还未执行 */
 	TASKLET_STATE_SCHED,	/* Tasklet is scheduled for execution */
 	TASKLET_STATE_RUN	/* Tasklet is running (SMP only) */
 };
@@ -603,6 +611,14 @@ extern void __tasklet_schedule(struct tasklet_struct *t);
 
 static inline void tasklet_schedule(struct tasklet_struct *t)
 {
+	/*
+	 * 一个 tasklet 挂载到一个 CPU 的 tasklet_vec 链表后会设置
+	 * TASKLET_STATE_SCHED 标志，只要该 tasklet 还没有执行，那么即使多次
+	 * 调用 tasklet_schedule()也不起作用。因此，一旦该 tasklet 挂载到某
+	 * 个 CPU 的 tasklet_vec 链表，它就必须在该 CPU 的软中断上下文中执行，
+	 * 直到执行完毕并清除了 TASKLET_STATE_SCHED 标志后，才有机会到其它 CPU
+	 * 上执行
+	 */
 	if (!test_and_set_bit(TASKLET_STATE_SCHED, &t->state))
 		__tasklet_schedule(t);
 }

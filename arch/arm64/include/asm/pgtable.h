@@ -55,6 +55,7 @@ extern void __pgd_error(const char *file, int line, unsigned long val);
  * ZERO_PAGE is a global shared page that is always zero: used
  * for zero-mapped memory areas etc..
  */
+/* 定义在 arch/arm64/mm/mmu.c */
 extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 #define ZERO_PAGE(vaddr)	phys_to_page(__pa_symbol(empty_zero_page))
 
@@ -69,6 +70,7 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 	((pte_val(pte) & PTE_ADDR_LOW) | ((pte_val(pte) & PTE_ADDR_HIGH) << 36))
 #define __phys_to_pte_val(phys)	(((phys) | ((phys) >> 36)) & PTE_ADDR_MASK)
 #else
+/* 是这个。取出 pte 的 bit[47:12] */
 #define __pte_to_phys(pte)	(pte_val(pte) & PTE_ADDR_MASK)
 #define __phys_to_pte_val(phys)	(phys)
 #endif
@@ -77,6 +79,7 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 #define pfn_pte(pfn,prot)	\
 	__pte(__phys_to_pte_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
 
+/* 页面为空 */
 #define pte_none(pte)		(!pte_val(pte))
 #define pte_clear(mm,addr,ptep)	set_pte(ptep, __pte(0))
 #define pte_page(pte)		(pfn_to_page(pte_pfn(pte)))
@@ -84,7 +87,9 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 /*
  * The following only work if pte_present(). Undefined behaviour otherwise.
  */
+/* 判断该页面是否在内存中 */
 #define pte_present(pte)	(!!(pte_val(pte) & (PTE_VALID | PTE_PROT_NONE)))
+/* 判断该页面是否被访问过 */
 #define pte_young(pte)		(!!(pte_val(pte) & PTE_AF))
 #define pte_special(pte)	(!!(pte_val(pte) & PTE_SPECIAL))
 #define pte_write(pte)		(!!(pte_val(pte) & PTE_WRITE))
@@ -103,6 +108,7 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 
 #define pte_hw_dirty(pte)	(pte_write(pte) && !(pte_val(pte) & PTE_RDONLY))
 #define pte_sw_dirty(pte)	(!!(pte_val(pte) & PTE_DIRTY))
+/* 判断该页面是否被写入过 */
 #define pte_dirty(pte)		(pte_sw_dirty(pte) || pte_hw_dirty(pte))
 
 #define pte_valid(pte)		(!!(pte_val(pte) & PTE_VALID))
@@ -191,6 +197,7 @@ static inline pte_t pte_mkyoung(pte_t pte)
 	return set_pte_bit(pte, __pgprot(PTE_AF));
 }
 
+/* 特殊映射页面，这些页面不参与内存管理的一些活动，如页面回收、页迁移和 KSM 等 */
 static inline pte_t pte_mkspecial(pte_t pte)
 {
 	return set_pte_bit(pte, __pgprot(PTE_SPECIAL));
@@ -217,6 +224,7 @@ static inline pmd_t pmd_mkcont(pmd_t pmd)
 	return __pmd(pmd_val(pmd) | PMD_SECT_CONT);
 }
 
+/* ptep: 指向页表中的页表项； pte: 新的页表项内容 */
 static inline void set_pte(pte_t *ptep, pte_t pte)
 {
 	WRITE_ONCE(*ptep, pte);
@@ -226,6 +234,7 @@ static inline void set_pte(pte_t *ptep, pte_t pte)
 	 * or update_mmu_cache() have the necessary barriers.
 	 */
 	if (pte_valid_not_user(pte))
+    /* 内核态映射的页面设置完 pte 后，需要调用 dsb 来保证页表更新完成 */
 		dsb(ishst);
 }
 
@@ -252,6 +261,7 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 	pte_t old_pte;
 
 	if (pte_present(pte) && pte_user_exec(pte) && !pte_special(pte))
+        /* 用户态映射的页面，需要进行高速缓存一致性操作 */
 		__sync_icache_dcache(pte);
 
 	/*
@@ -344,6 +354,7 @@ static inline pgprot_t mk_sect_prot(pgprot_t prot)
 /*
  * See the comment in include/asm-generic/pgtable.h
  */
+/* 是这个 */
 static inline int pte_protnone(pte_t pte)
 {
 	return (pte_val(pte) & (PTE_VALID | PTE_PROT_NONE)) == PTE_PROT_NONE;
@@ -422,6 +433,7 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 
 #define pmd_none(pmd)		(!pmd_val(pmd))
 
+/*  */
 #define pmd_bad(pmd)		(!(pmd_val(pmd) & PMD_TABLE_BIT))
 
 #define pmd_table(pmd)		((pmd_val(pmd) & PMD_TYPE_MASK) == \
@@ -441,6 +453,7 @@ extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 
 extern pgd_t init_pg_dir[PTRS_PER_PGD];
 extern pgd_t init_pg_end[];
+/* 在 arch\arm64\kernel\vmlinux.lds.S 里定义 */
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
 extern pgd_t idmap_pg_dir[PTRS_PER_PGD];
 extern pgd_t tramp_pg_dir[PTRS_PER_PGD];
@@ -484,6 +497,7 @@ static inline phys_addr_t pmd_page_paddr(pmd_t pmd)
 #define pte_offset_phys(dir,addr)	(pmd_page_paddr(READ_ONCE(*(dir))) + pte_index(addr) * sizeof(pte_t))
 #define pte_offset_kernel(dir,addr)	((pte_t *)__va(pte_offset_phys((dir), (addr))))
 
+/* 关于 pte_offset_map 安全使用问题，见 handle_pte_fault() 和 do_anonymous_page() */
 #define pte_offset_map(dir,addr)	pte_offset_kernel((dir), (addr))
 #define pte_offset_map_nested(dir,addr)	pte_offset_kernel((dir), (addr))
 #define pte_unmap(pte)			do { } while (0)
@@ -548,6 +562,7 @@ static inline phys_addr_t pud_page_paddr(pud_t pud)
 #define pmd_set_fixmap_offset(pud, addr)	pmd_set_fixmap(pmd_offset_phys(pud, addr))
 #define pmd_clear_fixmap()		clear_fixmap(FIX_PMD)
 
+/* 根据 PUD 页表项的值(pud_t)来计算该 pud_t 所在物理页面的 page 数据结构 */
 #define pud_page(pud)		pfn_to_page(__phys_to_pfn(__pud_to_phys(pud)))
 
 /* use ONLY for statically allocated translation tables */
@@ -571,6 +586,7 @@ static inline phys_addr_t pud_page_paddr(pud_t pud)
 #define pud_ERROR(pud)		__pud_error(__FILE__, __LINE__, pud_val(pud))
 
 #define pgd_none(pgd)		(!pgd_val(pgd))
+/* pgd 不能为块类型的页表项 */
 #define pgd_bad(pgd)		(!(pgd_val(pgd) & 2))
 #define pgd_present(pgd)	(pgd_val(pgd))
 
@@ -590,21 +606,33 @@ static inline void pgd_clear(pgd_t *pgdp)
 	set_pgd(pgdp, __pgd(0));
 }
 
+/* 得到参数 pgd 的 bit[47:12]，低 12 位为 0 */
 static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 {
 	return __pgd_to_phys(pgd);
 }
 
 /* Find an entry in the frst-level page table. */
+/* 计算 addr 在 PUD 页表中的索引值 */
 #define pud_index(addr)		(((addr) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
 
+/*
+ * *pgd 读取 pgd 页表项的值，其中的 bit[47:12] 就是 pud 页表的物理地址(详细可见设置
+ * pgd 页表项的函数 pgd_populate())
+ */
 #define pud_offset_phys(dir, addr)	(pgd_page_paddr(READ_ONCE(*(dir))) + pud_index(addr) * sizeof(pud_t))
+/* 在进程的 PUD 页表中，根据虚拟地址来查找对应的 PUD 页表项(pud_t *) */
 #define pud_offset(dir, addr)		((pud_t *)__va(pud_offset_phys((dir), (addr))))
 
 #define pud_set_fixmap(addr)		((pud_t *)set_fixmap_offset(FIX_PUD, addr))
+/*
+ * 通过 pud 页表的起始物理地址(*pgdp) + addr 对应的索引，就可以得到对应的
+ * pud 页表项的物理地址，然后再映射到固定的虚拟地址上
+ */
 #define pud_set_fixmap_offset(pgd, addr)	pud_set_fixmap(pud_offset_phys(pgd, addr))
 #define pud_clear_fixmap()		clear_fixmap(FIX_PUD)
 
+/* 根据 PGD 页表项的值(pgd_t)来计算该 pgd_t 所在物理页面的 page 数据结构 */
 #define pgd_page(pgd)		pfn_to_page(__phys_to_pfn(__pgd_to_phys(pgd)))
 
 /* use ONLY for statically allocated translation tables */
@@ -626,15 +654,19 @@ static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 #define pgd_ERROR(pgd)		__pgd_error(__FILE__, __LINE__, pgd_val(pgd))
 
 /* to find an entry in a page-table-directory */
+/* 计算虚拟地址在 PGD 页表中的索引值 */
 #define pgd_index(addr)		(((addr) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
 
 #define pgd_offset_raw(pgd, addr)	((pgd) + pgd_index(addr))
 
+/* 在进程的 PGD 页表中，根据虚拟地址来查找对应的 PGD 页表项(pgd_t *) */
 #define pgd_offset(mm, addr)	(pgd_offset_raw((mm)->pgd, (addr)))
 
 /* to find an entry in a kernel page-table-directory */
+/* 在内核的 PGD 页表中，根据虚拟地址来查找对应的页表项(pgd_t *) */
 #define pgd_offset_k(addr)	pgd_offset(&init_mm, addr)
 
+/* addr 是物理地址 */
 #define pgd_set_fixmap(addr)	((pgd_t *)set_fixmap_offset(FIX_PGD, addr))
 #define pgd_clear_fixmap()	clear_fixmap(FIX_PGD)
 

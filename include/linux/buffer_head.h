@@ -20,6 +20,7 @@
 enum bh_state_bits {
 	BH_Uptodate,	/* Contains valid data */
 	BH_Dirty,	/* Is dirty */
+	/* 防止多线程同时操作同一 buffer */
 	BH_Lock,	/* Is locked */
 	BH_Req,		/* Has been submitted for I/O */
 	BH_Uptodate_Lock,/* Used by the first bh in a page, to serialise
@@ -60,8 +61,10 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
  * a page (via a page_mapping) and for wrapping bio submission
  * for backward compatibility reasons (e.g. submit_bh).
  */
+/* alloc_buffer_head()和 attach_page_buffers() */
 struct buffer_head {
 	unsigned long b_state;		/* buffer state bitmap (see above) */
+	/* 链接指向同一页的所有 buffer_head ，方便查找与页关联的所有 buffer_head */
 	struct buffer_head *b_this_page;/* circular list of page's buffers */
 	struct page *b_page;		/* the page this bh is mapped to */
 
@@ -270,6 +273,7 @@ void buffer_init(void);
  * inline definitions
  */
 
+/* 将 buffers 与 page 关联 */
 static inline void attach_page_buffers(struct page *page,
 		struct buffer_head *head)
 {

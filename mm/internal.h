@@ -114,6 +114,7 @@ extern pmd_t *mm_find_pmd(struct mm_struct *mm, unsigned long address);
  * in __alloc_pages_slowpath(). All other functions pass the whole strucure
  * by a const pointer.
  */
+/* 用于伙伴系统分配函数中保存相关参数 */
 struct alloc_context {
 	struct zonelist *zonelist;
 	nodemask_t *nodemask;
@@ -181,22 +182,47 @@ extern int user_min_free_kbytes;
  * completes when free_pfn <= migrate_pfn
  */
 struct compact_control {
+    /*
+     * 空闲页面链表，页面将往这里迁移。从 zone 尾部向 zone 头部方向扫描，
+     * 查找哪些页面是空闲页面，这些页面会被添加到该链表中
+     */
 	struct list_head freepages;	/* List of free pages to migrate to */
+    /*
+     * 可迁移页面链表，页面将从这里迁移。从 zone 头部向 zone 尾部方向扫描，
+     * 查找哪些页面是可迁移的，这些页面会被添加到该链表中
+     */
 	struct list_head migratepages;	/* List of pages being migrated */
+    /* 扫描的 zone */
 	struct zone *zone;
+    /* 已经分离的空闲页面数量。若迁移完成之后，表示还剩下多少空闲页面 */
 	unsigned long nr_freepages;	/* Number of isolated free pages */
+    /* 准备迁移的页面数量 */
 	unsigned long nr_migratepages;	/* Number of pages to migrate */
+    /* 已经扫描并用于迁移的页面总数 */
 	unsigned long total_migrate_scanned;
+    /* 已经扫描并用于空闲页面总数 */
 	unsigned long total_free_scanned;
+    /* 开始时，从 zone 尾部开始。扫描结束时的 pfn */
 	unsigned long free_pfn;		/* isolate_freepages search base */
+    /* 开始时，从 zone 头部开始。一般会对齐到 pageblock 的地址。扫描结束时的 pfn */
 	unsigned long migrate_pfn;	/* isolate_migratepages search base */
+    /* 上一次扫描可迁移页面的位置 */
 	unsigned long last_migrated_pfn;/* Not yet flushed page being freed */
+    /* 调用页面分配器时的分配掩码 */
 	const gfp_t gfp_mask;		/* gfp mask of a direct compactor */
+    /* 调用页面分配器时的 order 值 */
 	int order;			/* order a direct compactor needs */
 	int migratetype;		/* migratetype of direct compactor */
+    /* 页面分配器内部使用的标志 */
 	const unsigned int alloc_flags;	/* alloc flags of a direct compactor */
+    /* 页面分配器根据分配掩码计算出来的首选的 zone 编号 */
 	const int classzone_idx;	/* zone index of a direct compactor */
 	enum migrate_mode mode;		/* Async or sync migration mode */
+    /* 整理过程中并不会对每个 pageblock 做扫描操作，如果 ignore_skip_hint 设置成
+     * true ，则可以不用关心哪些 pageblock 被设置了 PB_migrate_skip ，都会去扫描；
+     * 但是如果 ignore_skip_hint 被设置成了 false ，即被标记成 PB_migrate_skip 的
+     * pageblock 都将会给跳过。
+     */
 	bool ignore_skip_hint;		/* Scan blocks even if marked skip */
 	bool no_set_skip_hint;		/* Don't mark blocks for skipping */
 	bool ignore_block_suitable;	/* Scan blocks considered unsuitable */
@@ -244,6 +270,7 @@ static inline unsigned int page_order(struct page *page)
  */
 #define page_order_unsafe(page)		READ_ONCE(page_private(page))
 
+/* VMA 是一个写时复制映射，即不是共享的进程地址空间 */
 static inline bool is_cow_mapping(vm_flags_t flags)
 {
 	return (flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
@@ -332,6 +359,10 @@ extern pmd_t maybe_pmd_mkwrite(pmd_t pmd, struct vm_area_struct *vma);
 
 /*
  * At what user virtual address is page expected in @vma?
+ */
+/*
+ * 页的起始虚拟地址，是页对齐的。逆计算是 linear_page_index()。
+ * 核心公式就是： address(页对齐) - vm->vm_start = page->index - vm->vm_pgoff
  */
 static inline unsigned long
 __vma_address(struct page *page, struct vm_area_struct *vma)
@@ -474,6 +505,10 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 #define ALLOC_WMARK_MIN		WMARK_MIN
 #define ALLOC_WMARK_LOW		WMARK_LOW
 #define ALLOC_WMARK_HIGH	WMARK_HIGH
+/*
+ * 表示需要分配页面的进程优先级最高，如 __GFP_MEMALLOC 或者进程设置了
+ * PF_MEMALLOC 标志位，可以访问系统中所有内存，包括系统预留的内存
+ */
 #define ALLOC_NO_WATERMARKS	0x04 /* don't check watermarks at all */
 
 /* Mask to get the watermark bits */
@@ -484,13 +519,22 @@ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
  * cannot assume a reduced access to memory reserves is sufficient for
  * !MMU
  */
+/* 用于补偿 OOM 进程或者线程。可以访问 min 以下 3/4 的内存 */
 #ifdef CONFIG_MMU
 #define ALLOC_OOM		0x08
 #else
 #define ALLOC_OOM		ALLOC_NO_WATERMARKS
 #endif
 
+/*
+ * 表示需要分配页面的进程不能睡眠且优先级比较高，如 __GFP_ATOMIC 或者实
+ * 时进程。可以访问 min 以下 5/8 的内存
+ */
 #define ALLOC_HARDER		 0x10 /* try to alloc harder */
+/*
+ * 表示需要分配页面的进程优先级比较高，如 __GFP_HIGH。可以访问 min 以下
+ * 1/2 的内存
+ */
 #define ALLOC_HIGH		 0x20 /* __GFP_HIGH set */
 #define ALLOC_CPUSET		 0x40 /* check for correct cpuset */
 #define ALLOC_CMA		 0x80 /* allow allocations from CMA areas */

@@ -381,6 +381,7 @@ confused:
  *
  * This all causes the disk requests to be issued in the correct order.
  */
+/* 构造 bio ，关联相关 page */
 int
 mpage_readpages(struct address_space *mapping, struct list_head *pages,
 				unsigned nr_pages, get_block_t get_block)
@@ -414,6 +415,10 @@ EXPORT_SYMBOL(mpage_readpages);
 
 /*
  * This isn't called much at all
+ */
+/*
+ * 从块设备读取整页。如果整页有些不是最新的，最好调用 block_read_full_page()，
+ * 避免多余开销
  */
 int mpage_readpage(struct page *page, get_block_t get_block)
 {

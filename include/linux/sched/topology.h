@@ -10,6 +10,7 @@
  * Increase resolution of cpu_capacity calculations
  */
 #define SCHED_CAPACITY_SHIFT	SCHED_FIXEDPOINT_SHIFT
+/* 系统中最强的 CPU 的量化计算能力 */
 #define SCHED_CAPACITY_SCALE	(1L << SCHED_CAPACITY_SHIFT)
 
 /*
@@ -17,20 +18,33 @@
  */
 #ifdef CONFIG_SMP
 
+/* 表示该调度域运行后做负载均衡调度 */
 #define SD_LOAD_BALANCE		0x0001	/* Do load balancing on this domain. */
+/* 表示当 CPU 变成空闲后做负载均衡调度 */
 #define SD_BALANCE_NEWIDLE	0x0002	/* Balance when about to become idle */
+/* 表示一个进程调用 exec 时会重新选择一个最优的 CPU 来运行，详见 sched_exec() */
 #define SD_BALANCE_EXEC		0x0004	/* Balance on exec */
+/* 表示派生一个新进程后会选择一个最优的 CPU 来运行新进程，详见 wake_up_new_task() */
 #define SD_BALANCE_FORK		0x0008	/* Balance on fork, clone */
+/* 表示唤醒一个进程时会选择一个最优的 CPU 来唤醒该进程，详见 wake_up_process() */
 #define SD_BALANCE_WAKE		0x0010  /* Balance on wakeup */
+/* 支持 wake affine 特性 */
 #define SD_WAKE_AFFINE		0x0020	/* Wake task to waking CPU */
+/* 表示该调度域有不同架构的 CPU ，如大/小核 */
 #define SD_ASYM_CPUCAPACITY	0x0040  /* Domain members have different CPU capacities */
+/* 表示该调度域中的 CPU 都是可以共享 CPU 资源的，主要用于描述 SMT 调度层级 */
 #define SD_SHARE_CPUCAPACITY	0x0080	/* Domain members share CPU capacity */
+/* 表示该调度域的 CPU 可以共享电源域 */
 #define SD_SHARE_POWERDOMAIN	0x0100	/* Domain members share power domain */
+/* 表示该调度域的 CPU 可以共享高速缓存 */
 #define SD_SHARE_PKG_RESOURCES	0x0200	/* Domain members share CPU pkg resources */
 #define SD_SERIALIZE		0x0400	/* Only a single load balancing instance */
+/* 用于描述与 SMT 调度层级相关的一些例外 */
 #define SD_ASYM_PACKING		0x0800  /* Place busy groups earlier in the domain */
+/* 表示可以在兄弟调度域中迁移进程 */
 #define SD_PREFER_SIBLING	0x1000	/* Prefer to place tasks in a sibling domain */
 #define SD_OVERLAP		0x2000	/* sched_domains of this level overlap */
+/* 用于描述 NUMA 调度层级 */
 #define SD_NUMA			0x4000	/* cross-node balancing */
 
 #ifdef CONFIG_SCHED_SMT
@@ -74,6 +88,7 @@ struct sched_domain_shared {
 	int		has_idle_cores;
 };
 
+/* 描述调度层级 */
 struct sched_domain {
 	/* These fields must be setup */
 	struct sched_domain *parent;	/* top domain must be null terminated */
@@ -182,6 +197,7 @@ struct sd_data {
 	struct sched_group_capacity **__percpu sgc;
 };
 
+/* 描述 CPU 的层次关系 */
 struct sched_domain_topology_level {
 	sched_domain_mask_f mask;
 	sched_domain_flags_f sd_flags;

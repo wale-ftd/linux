@@ -8,8 +8,11 @@
 #define MREMAP_MAYMOVE	1
 #define MREMAP_FIXED	2
 
+/* 估算可用内存的数量，因为没法准确计算可用内存的数量，所以说是猜测 */
 #define OVERCOMMIT_GUESS		0
+/* 总是允许过量提交 */
 #define OVERCOMMIT_ALWAYS		1
+/* 不允许过量提交 */
 #define OVERCOMMIT_NEVER		2
 
 /*

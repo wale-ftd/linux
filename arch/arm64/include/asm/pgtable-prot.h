@@ -26,7 +26,9 @@
  */
 #define PTE_VALID		(_AT(pteval_t, 1) << 0)
 #define PTE_WRITE		(PTE_DBM)		 /* same as DBM (51) */
+/* 软件脏位，利用硬件上[58:55]的空闲位 */
 #define PTE_DIRTY		(_AT(pteval_t, 1) << 55)
+/* pte_mkspecial() 和 pte_special()  */
 #define PTE_SPECIAL		(_AT(pteval_t, 1) << 56)
 #define PTE_PROT_NONE		(_AT(pteval_t, 1) << 58) /* only when !PTE_VALID */
 
@@ -43,6 +45,14 @@
 #define PROT_DEFAULT		(_PROT_DEFAULT | PTE_MAYBE_NG)
 #define PROT_SECT_DEFAULT	(_PROT_SECT_DEFAULT | PMD_MAYBE_NG)
 
+/*
+ * 根据内存类型，页表的属性分成下面这些。
+ *
+ * 不同类型的页面该采用什么类型的内存属性呢？
+ * 1. 内核可执行代码段和数据段都应该采用普通内存。如 PAGE_KERNEL 。
+ * 2. 当需要映射内存给设备使用时，通常会使用与 PROT_DEVICE 相关的属性，如
+ *    Linux 内核中的 ioremap()接口函数会把外部设备的内存映射到内核地址空间中。
+ */
 #define PROT_DEVICE_nGnRnE	(PROT_DEFAULT | PTE_PXN | PTE_UXN | PTE_DIRTY | PTE_WRITE | PTE_ATTRINDX(MT_DEVICE_nGnRnE))
 #define PROT_DEVICE_nGnRE	(PROT_DEFAULT | PTE_PXN | PTE_UXN | PTE_DIRTY | PTE_WRITE | PTE_ATTRINDX(MT_DEVICE_nGnRE))
 #define PROT_NORMAL_NC		(PROT_DEFAULT | PTE_PXN | PTE_UXN | PTE_DIRTY | PTE_WRITE | PTE_ATTRINDX(MT_NORMAL_NC))
@@ -56,10 +66,15 @@
 #define _PAGE_DEFAULT		(_PROT_DEFAULT | PTE_ATTRINDX(MT_NORMAL))
 #define _HYP_PAGE_DEFAULT	_PAGE_DEFAULT
 
+/* 内核中的普通内存页面 */
 #define PAGE_KERNEL		__pgprot(PROT_NORMAL)
+/* 内核中只读的普通内存页面 */
 #define PAGE_KERNEL_RO		__pgprot((PROT_NORMAL & ~PTE_WRITE) | PTE_RDONLY)
+/* 内核中只读的可执行的普通内存页面 */
 #define PAGE_KERNEL_ROX		__pgprot((PROT_NORMAL & ~(PTE_WRITE | PTE_PXN)) | PTE_RDONLY)
+/* 内核中可执行的普通内存页面 */
 #define PAGE_KERNEL_EXEC	__pgprot(PROT_NORMAL & ~PTE_PXN)
+/* 内核中可执行的普通内存页面，并且是物理连续的多个页面 */
 #define PAGE_KERNEL_EXEC_CONT	__pgprot((PROT_NORMAL & ~PTE_PXN) | PTE_CONT)
 
 #define PAGE_HYP		__pgprot(_HYP_PAGE_DEFAULT | PTE_HYP | PTE_HYP_XN)

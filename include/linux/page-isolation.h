@@ -3,6 +3,7 @@
 #define __LINUX_PAGEISOLATION_H
 
 #ifdef CONFIG_MEMORY_ISOLATION
+/* 是这个 */
 static inline bool has_isolate_pageblock(struct zone *zone)
 {
 	return zone->nr_isolate_pageblock;

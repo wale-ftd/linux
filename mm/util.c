@@ -352,6 +352,7 @@ unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 		up_write(&mm->mmap_sem);
 		userfaultfd_unmap_complete(mm, &uf);
 		if (populate)
+            /* 分配内存 */
 			mm_populate(ret, populate);
 	}
 	return ret;
@@ -467,6 +468,7 @@ void *page_rmapping(struct page *page)
  * Return true if this page is mapped into pagetables.
  * For compound page it returns true if any subpage of compound page is mapped.
  */
+/* 是否有用户 PTE 映射该页面 */
 bool page_mapped(struct page *page)
 {
 	int i;
@@ -497,6 +499,10 @@ struct anon_vma *page_anon_vma(struct page *page)
 	return __page_rmapping(page);
 }
 
+/*
+ * 返回页面的 mapping ：
+ *   1. 若页面
+ */
 struct address_space *page_mapping(struct page *page)
 {
 	struct address_space *mapping;
@@ -604,6 +610,7 @@ unsigned long vm_commit_limit(void)
  * Make sure vm_committed_as in one cacheline and not cacheline shared with
  * other variables. It can be updated by several CPUs frequently.
  */
+/* 指所有进程提交的虚拟内存的总和 */
 struct percpu_counter vm_committed_as ____cacheline_aligned_in_smp;
 
 /*
@@ -662,6 +669,10 @@ int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 		 * that won't affect the overall amount of available
 		 * memory in the system.
 		 */
+		/*
+		 * 共享内存页会计入 NR_FILE_PAGES ，但它们不应该算作空闲页，因为它们不能
+		 * 被释放，只能换出到交换区，所以这里要减去
+		 */
 		free -= global_node_page_state(NR_SHMEM);
 
 		free += get_nr_swap_pages();
@@ -691,6 +702,7 @@ int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 		/*
 		 * Reserve some for root
 		 */
+		/* 如果进程没有系统管理权限，那么减去为根用户保留的页数 */
 		if (!cap_sys_admin)
 			free -= sysctl_admin_reserve_kbytes >> (PAGE_SHIFT - 10);
 
@@ -699,6 +711,8 @@ int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 
 		goto error;
 	}
+
+	/* 下面处理 OVERCOMMIT_NEVER 的情况 */
 
 	allowed = vm_commit_limit();
 	/*
@@ -709,6 +723,10 @@ int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 
 	/*
 	 * Don't let a single process grow so big a user can't recover
+	 */
+	/*
+	 * 为了防止一个用户启动一个消耗内存大的进程，保留一部分内存：取"进程虚拟内存
+	 * 长度的 1/32"和"用户保留的页数"的较小值。
 	 */
 	if (mm) {
 		reserve = sysctl_user_reserve_kbytes >> (PAGE_SHIFT - 10);

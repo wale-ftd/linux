@@ -10,6 +10,7 @@
  * the libc and compiler builtin ffs routines, therefore
  * differs in spirit from the above ffz (man ffs).
  */
+/* ffs() = __ffs() + 1 */
 static inline int ffs(int x)
 {
 	int r = 1;

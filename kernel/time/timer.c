@@ -1625,6 +1625,11 @@ static inline int collect_expired_timers(struct timer_base *base,
  * Called from the timer interrupt handler to charge one tick to the current
  * process.  user_tick is 1 if the tick is user time, 0 for system.
  */
+/*
+ * el1_irq -> gic_handle_irq -> generic_handle_irq -> arch_timer_handler_virt
+ * -> timer_handler -> htimer_interrupt -> tick_sched_timer ->
+ * tick_sched_handler -> update_process_times
+ */
 void update_process_times(int user_tick)
 {
 	struct task_struct *p = current;

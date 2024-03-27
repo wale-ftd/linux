@@ -38,6 +38,10 @@
  * not. The macros handles invoking the asm with or without the
  * register argument as appropriate.
  */
+/*
+ * CONFIG_ARM64_WORKAROUND_REPEAT_TLBI 说明使用一个折中的方法来修复处
+ * 理器中的硬件故障: tlbi + dsb + tlbi
+ */
 #define __TLBI_0(op, arg) asm ("tlbi " #op "\n"				       \
 		   ALTERNATIVE("nop\n			nop",		       \
 			       "dsb ish\n		tlbi " #op,	       \
@@ -139,6 +143,7 @@
  *	on top of these routines, since that is our interface to the mmu_gather
  *	API as used by munmap() and friends.
  */
+/* 使本地 CPU 对应的整个 TLB 无效 */
 static inline void local_flush_tlb_all(void)
 {
 	dsb(nshst);
@@ -147,14 +152,23 @@ static inline void local_flush_tlb_all(void)
 	isb();
 }
 
+/* 使所有处理器上的整个 TLB(包括内核空间和用户空间的 TLB)无效 */
 static inline void flush_tlb_all(void)
 {
+    /* 保证内存访问指令已经完成，如修改页表等操作 */
 	dsb(ishst);
+    /*
+     * vmalle1is 使 EL1 中所有 VMID 指定的 TLB 无效，这里仅仅指的是内部
+     * 共享的 TLB
+     */
 	__tlbi(vmalle1is);
+    /* 保证前面的 TLBI 指令执行完成 */
 	dsb(ish);
+    /* 在流水线中丢弃已经从旧页表映射中获取的指令 */
 	isb();
 }
 
+/* 使一个进程中整个用户空间地址的 TLB 无效 */
 static inline void flush_tlb_mm(struct mm_struct *mm)
 {
 	unsigned long asid = __TLBI_VADDR(0, ASID(mm));
@@ -175,6 +189,7 @@ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
 	__tlbi_user(vale1is, addr);
 }
 
+/* 使虚拟地址 addr 所映射页面的 TLB 页表项无效 */
 static inline void flush_tlb_page(struct vm_area_struct *vma,
 				  unsigned long uaddr)
 {
@@ -192,6 +207,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 				     unsigned long start, unsigned long end,
 				     unsigned long stride, bool last_level)
 {
+    /* 获取当前进程对应的 ASID */
 	unsigned long asid = ASID(vma->vm_mm);
 	unsigned long addr;
 
@@ -203,12 +219,17 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 	/* Convert the stride into units of 4k */
 	stride >>= 12;
 
+    /* 生成 TLBI 指令所需参数 */
 	start = __TLBI_VADDR(start, asid);
 	end = __TLBI_VADDR(end, asid);
 
 	dsb(ishst);
 	for (addr = start; addr < end; addr += stride) {
 		if (last_level) {
+            /*
+             * vale1is 使 EL1 中所有由虚拟地址指定的 TLB 无效，这里指的是
+             * 内部共享的 TLB
+             */
 			__tlbi(vale1is, addr);
 			__tlbi_user(vale1is, addr);
 		} else {
@@ -219,6 +240,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 	dsb(ish);
 }
 
+/* 使进程地址空间的某段虚拟地址区间(从 start 到 end)对应的 TLB 无效 */
 static inline void flush_tlb_range(struct vm_area_struct *vma,
 				   unsigned long start, unsigned long end)
 {
@@ -229,6 +251,7 @@ static inline void flush_tlb_range(struct vm_area_struct *vma,
 	__flush_tlb_range(vma, start, end, PAGE_SIZE, false);
 }
 
+/* 使内核地址空间的某段虚拟地址区间(从 start 到 end)对应的 TLB 无效 */
 static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end)
 {
 	unsigned long addr;

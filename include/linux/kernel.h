@@ -191,6 +191,7 @@
  * Multiplies an integer by a fraction, while avoiding unnecessary
  * overflow or loss of precision.
  */
+/* 相当于 x * numer / denom */
 #define mult_frac(x, numer, denom)(			\
 {							\
 	typeof(x) quot = (x) / (denom);			\

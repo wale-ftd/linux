@@ -277,6 +277,11 @@ struct zspage {
 		unsigned int isolated:ISOLATED_BITS;
 		unsigned int magic:MAGIC_VAL_BITS;
 	};
+    /*
+     * 用来记录 obj 的个数。
+     * 决定 zspage 的 fullness group ，算法见 get_fullness_group()。
+     * inuse 的值越接近 class->objs_per_zspage 越好
+     */
 	unsigned int inuse;
 	unsigned int freeobj;
 	struct page *first_page;
@@ -643,6 +648,7 @@ static int zs_stats_size_show(struct seq_file *s, void *v)
 
 	return 0;
 }
+/* 在 include/linux/seq_file.h 定义 */
 DEFINE_SHOW_ATTRIBUTE(zs_stats_size);
 
 static void zs_pool_stat_create(struct zs_pool *pool, const char *name)
@@ -1476,6 +1482,7 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 	enum fullness_group newfg;
 	struct zspage *zspage;
 
+    /* 最大只能分配一页 */
 	if (unlikely(!size || size > ZS_MAX_ALLOC_SIZE))
 		return 0;
 
@@ -2053,6 +2060,7 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	if (!is_zspage_isolated(zspage))
 		putback_zspage(class, zspage);
 
+    /* 设置 page 对应的成员和属性，如 清除 PAGE_MAPPING_MOVABLE 标志 */
 	reset_page(page);
 	put_page(page);
 	page = newpage;

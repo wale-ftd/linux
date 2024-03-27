@@ -450,13 +450,19 @@ static inline loff_t page_file_offset(struct page *page)
 extern pgoff_t linear_hugepage_index(struct vm_area_struct *vma,
 				     unsigned long address);
 
+/*
+ * 通过 vma 和 address 计算 page->index 。逆向计算是 __vma_address()。
+ * 核心公式就是： address(页对齐) - vm->start = page->index - vm->vm_pgoff
+ */
 static inline pgoff_t linear_page_index(struct vm_area_struct *vma,
 					unsigned long address)
 {
 	pgoff_t pgoff;
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		return linear_hugepage_index(vma, address);
+    /* 计算当前地址 address 在 VMA 中的第几个页面 */
 	pgoff = (address - vma->vm_start) >> PAGE_SHIFT;
+    /* 再加上 vma 的偏移量 */
 	pgoff += vma->vm_pgoff;
 	return pgoff;
 }
@@ -467,6 +473,7 @@ extern int __lock_page_or_retry(struct page *page, struct mm_struct *mm,
 				unsigned int flags);
 extern void unlock_page(struct page *page);
 
+/* true: 成功加锁； false: 锁已经被别的进程获取 */
 static inline int trylock_page(struct page *page)
 {
 	page = compound_head(page);
@@ -524,6 +531,7 @@ extern int wait_on_page_bit_killable(struct page *page, int bit_nr);
  * ie with increased "page->count" so that the page won't
  * go away during the wait..
  */
+/* 等待别的进程释放 PG_locked ，但不拿 PG_locked */
 static inline void wait_on_page_locked(struct page *page)
 {
 	if (PageLocked(page))

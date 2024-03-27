@@ -68,25 +68,87 @@
  * SPARSEMEM_EXTREME with !SPARSEMEM_VMEMMAP).
  */
 enum pageflags {
+    /* 建议使用 lock_page()/unlock_page()操作 */
 	PG_locked,		/* Page is locked. Don't touch. */
 	PG_referenced,
+	/*
+	 * 表示该页面的数据是有效的/最新的，即与存储设备里的数据一致。如
+	 * do_anonymous_page()/do_cow_fault()/do_swap_page()/do_fault()里等。如果是需
+	 * 要从块设备里读的，会在 IO 传输完的回调函数(如 end_swap_bio_read())里设置。
+	 */
 	PG_uptodate,
+	/* 页面为脏页，稍后需要把内容写回交换分区/磁盘。如 add_to_swap()里 */
 	PG_dirty,
+	/*
+	 * 可迁移的页面支持两大类内存页面：
+	 * 标准 LRU 页面：如匿名页面和文件映射页面。
+	 * 非 LRU 页面：指一些特殊的可迁移页面，如 zsmalloc 或者 virtio-balloon 页面，
+	 *              page.mapping 成员的低位中设置 PAGE_MAPPING_MOVABLE 标志位来识
+	 *              别非 LRU 页面。
+	 */
 	PG_lru,
 	PG_active,
+	/*
+	 * 第一次是在 shrink_active_list()里设置，其它地方跟随第一次，不重要。说明只
+	 * 要在 active lru 链表里待过的页面就是 workingset 的。
+	 */
 	PG_workingset,
+	/* 有进程等待这个页面 */
 	PG_waiters,		/* Page has waiters, check its waitqueue. Must be bit #7 and in the same byte as "PG_locked" */
+	/* 页面操作过程中发生 I/O 错误 */
 	PG_error,
 	PG_slab,
 	PG_owner_priv_1,	/* Owner use. If pagecache, fs may use*/
 	PG_arch_1,
 	PG_reserved,
+	/* 存放在 page->private 里的数据是有效的 */
 	PG_private,		/* If pagecache, has fs-private data */
 	PG_private_2,		/* If pagecache, has fs aux data */
+	/*
+	 * 具体文件系统 writepage/writepages 接口里调用 test_set_page_writeback()/
+	 * set_page_writeback()来设置
+	 *
+	 * 当脏页被回写完成后会调用 end_page_writeback()来唤醒等待该页的进程
+	 */
 	PG_writeback,		/* Page is under writeback */
 	PG_head,		/* A head page */
 	PG_mappedtodisk,	/* Has blocks allocated on-disk */
+	/*
+	 * 待回收页面， 见 swap.c 文件里的 lru_rotate_pvecs 。
+	 *
+	 * 和 PG_readahead 共用。 PG_readahead is only used for reads; PG_reclaim is
+	 * only for writes
+	 */
 	PG_reclaim,		/* To be reclaimed asap */
+	/*
+	 * 主要用于判断页面是放到匿名 LRU 链表还是 文件 LRU 链表，可见
+	 * page_is_file_cache()。
+	 *
+	 * 包含 anonymous, tmpfs or otherwise ram or swap backed 。
+	 *
+	 * 注意和 PageAnon()的区别:
+	 *   1. PageAnon(page) && PageSwapBacked(page)，标准的匿名页面，其 page->mapping
+	 *      指向对应的 vma->anon_vma ，见 do_anonymous_page()。
+	 *   2. !PageAnon(page) && PageSwapBacked(page)，如 shmem ，其 page->mapping 指
+	 *      向的是 struct adress_space* 类型的 inode->i_mapping ，见 do_shared_fault()。
+	 *   3. PageAnon(page) && !PageSwapBacked(page)，这是一种比较特殊的情况，
+	 *      称为 lazyfree pages ，这种 pages 是通过 madvise()对匿名页设置了
+	 *      MADV_FREE 形成的，这种状态并非一蹴而就，而是分两个阶段：
+	 *        a. 将 page 加入到 lazyfree 缓存链表
+	 *           this_cpu_ptr(&lru_pvecs.lru_lazyfree) 中，见 mark_page_lazyfree()。
+	 *        b. 清除 PG_swapbacked 标志。     清除 lazyfree pages PG_swapbacked 标志的点
+	 *           有两个：
+     *             (1) lazyfree lru 缓存链表满或者 PageCompound(page)的情况
+     *             (2) 内存紧张进行回收时的情况
+     *           这两种情况都会调用 lru_lazyfree_fn()函数来将 lazyfree lru 缓存链表
+     *           上的 page 转移到 lru 链表上。
+     *
+     * 可以参考一下下面的描述：
+     * PG_swapbacked is set when a page uses swap as a backing storage.  This are
+     * usually PageAnon or shmem pages but please note that even anonymous pages
+     * might lose their PG_swapbacked flag when they simply can be dropped (e.g. as
+     * a result of MADV_FREE).
+	 */
 	PG_swapbacked,		/* Page is backed by RAM/swap */
 	PG_unevictable,		/* Page is "unevictable"  */
 #ifdef CONFIG_MMU
@@ -108,6 +170,10 @@ enum pageflags {
 	PG_checked = PG_owner_priv_1,
 
 	/* SwapBacked */
+    /*
+     * add_to_swap_cache()里设置，表示已将 page 加入到 swap_address_space 中。
+     * 当页面写进交换空间后， __remove_mapping()里会清除
+     */
 	PG_swapcache = PG_owner_priv_1,	/* Swap page: swp_entry_t in private */
 
 	/* Two page bits are conscripted by FS-Cache to maintain local caching
@@ -131,6 +197,12 @@ enum pageflags {
 	PG_double_map = PG_private_2,
 
 	/* non-lru isolated movable page */
+    /*
+     * 防止多个 CPU 同时分离同一个页面。若一个 CPU 发现一个页面设置了 PG_isolate ，
+     * 那么它会忽略这个页面。若驱动程序发现一个页面设置了 PG_isolate ，说明根据内存
+     * 模块的页面迁移机制已经分离了这个页面，因此驱动程序不应该使用这个页面的 page
+     * 中的 lru 成员。
+     */
 	PG_isolated = PG_reclaim,
 };
 
@@ -152,6 +224,15 @@ static __always_inline int PageTail(struct page *page)
 	return READ_ONCE(page->compound_head) & 1;
 }
 
+/*
+ * 混合页面。如透明巨页(THP)以及 hugetlbfs 页面
+ *
+ * 复合页就是将一组物理地址连续的页组合在一起，第一个页面称为 compound head ，可以
+ * 在 page->flags 中看到有 PG_head 被设置，其他所有的页都是 Tail ；且除 Head 外所有
+ * 的 tail page 的 page->compound_head 都指向 head 页的地址， _refcount 被设置为 0 ，
+ * compound_mapcount 被设置成了 -1 ，表征该 compound pages 包含 page 数量存储在
+ * Head page 的 compound_order 中。
+ */
 static __always_inline int PageCompound(struct page *page)
 {
 	return test_bit(PG_head, &page->flags) || PageTail(page);
@@ -232,10 +313,12 @@ static __always_inline void __SetPage##uname(struct page *page)		\
 static __always_inline void __ClearPage##uname(struct page *page)	\
 	{ __clear_bit(PG_##lname, &policy(page, 1)->flags); }
 
+/* Set a bit and return its old value */
 #define TESTSETFLAG(uname, lname, policy)				\
 static __always_inline int TestSetPage##uname(struct page *page)	\
 	{ return test_and_set_bit(PG_##lname, &policy(page, 1)->flags); }
 
+/* Clear a bit and return its old value */
 #define TESTCLEARFLAG(uname, lname, policy)				\
 static __always_inline int TestClearPage##uname(struct page *page)	\
 	{ return test_and_clear_bit(PG_##lname, &policy(page, 1)->flags); }
@@ -416,6 +499,13 @@ PAGEFLAG(Idle, idle, PF_ANY)
  * refers to user virtual address space into which the page is mapped.
  */
 #define PAGE_MAPPING_ANON	0x1
+/*
+ * 非 LRU 页面：指一些特殊的可迁移页面，如 zsmalloc 或者 virtio-balloon 页面，
+ *              page.mapping 成员的低位中设置 PAGE_MAPPING_MOVABLE 标志位来识
+ *              别非 LRU 页面。
+ *
+ * 相关操作函数： __PageMovable()/PageMovable()/__SetPageMovable()/__ClearPageMovable()
+ */
 #define PAGE_MAPPING_MOVABLE	0x2
 #define PAGE_MAPPING_KSM	(PAGE_MAPPING_ANON | PAGE_MAPPING_MOVABLE)
 #define PAGE_MAPPING_FLAGS	(PAGE_MAPPING_ANON | PAGE_MAPPING_MOVABLE)
@@ -431,6 +521,7 @@ static __always_inline int PageAnon(struct page *page)
 	return ((unsigned long)page->mapping & PAGE_MAPPING_ANON) != 0;
 }
 
+/* 判断是否属于非 LRU 页面 */
 static __always_inline int __PageMovable(struct page *page)
 {
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==

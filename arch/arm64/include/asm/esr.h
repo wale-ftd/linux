@@ -85,6 +85,7 @@
 
 /* ISS field definitions shared by different classes */
 #define ESR_ELx_WNR_SHIFT	(6)
+/* ISS 表中的 WnR 字段。 1/0 表示写/读内存区域发生错误 */
 #define ESR_ELx_WNR		(UL(1) << ESR_ELx_WNR_SHIFT)
 
 /* Asynchronous Error Type */
@@ -132,6 +133,11 @@
 #define ESR_ELx_AR_SHIFT	(14)
 #define ESR_ELx_AR 		(UL(1) << ESR_ELx_AR_SHIFT)
 #define ESR_ELx_CM_SHIFT	(8)
+/*
+ * 高速缓存维护。
+ *   0: 异常不来自高速缓存维护等相关指令
+ *   1: 异常发生于执行高速缓存维护等相关指令或者执行地址转换指令时
+ */
 #define ESR_ELx_CM 		(UL(1) << ESR_ELx_CM_SHIFT)
 
 /* ISS field definitions for exceptions taken in to Hyp */

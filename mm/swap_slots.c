@@ -307,6 +307,7 @@ direct_free:
 	return 0;
 }
 
+/* allocates a slot in a swap_map by searching active swap areas */
 swp_entry_t get_swap_page(struct page *page)
 {
 	swp_entry_t entry, *pentry;
@@ -342,6 +343,7 @@ repeat:
 				cache->nr--;
 			} else {
 				if (refill_swap_slots_cache(cache))
+				/* 补充 swap slots cache */
 					goto repeat;
 			}
 		}

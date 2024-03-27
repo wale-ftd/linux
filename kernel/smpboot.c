@@ -106,6 +106,7 @@ enum {
 static int smpboot_thread_fn(void *data)
 {
 	struct smpboot_thread_data *td = data;
+	/* 是 cpu_stop_threads */
 	struct smp_hotplug_thread *ht = td->ht;
 
 	while (1) {
@@ -161,6 +162,7 @@ static int smpboot_thread_fn(void *data)
 		} else {
 			__set_current_state(TASK_RUNNING);
 			preempt_enable();
+			/* 是 cpu_stopper_thread() */
 			ht->thread_fn(td->cpu);
 		}
 	}

@@ -353,6 +353,7 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * If we observe any contention; queue.
 	 */
 	if (val & ~_Q_LOCKED_MASK)
+	/* pending 域或 tail 域有值，说明已经有 CPU 在等待这个锁，转去排队 */
 		goto queue;
 
 	/*
@@ -360,6 +361,7 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 *
 	 * 0,0,* -> 0,1,* -> 0,0,1 pending, trylock
 	 */
+	/* 设置 pending 域。注意返回值是 lock 的旧值 */
 	val = queued_fetch_set_pending_acquire(lock);
 
 	/*
@@ -370,9 +372,15 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * on @next to become !NULL.
 	 */
 	if (unlikely(val & ~_Q_LOCKED_MASK)) {
+	/* pending 域或 tail 域有值，说明已经有 CPU 在等待这个锁，转去排队 */
 
 		/* Undo PENDING if we set it. */
 		if (!(val & _Q_PENDING_MASK))
+		/*
+		 * 锁的旧值中的 tail 域有值并且 pending 域为 0 。那什么时候会走到这里
+		 * 呢？这是一个复杂的场景(涉及中断)，需要用 4 个 CPU 竞争锁来说明：
+		 *
+		 */
 			clear_pending(lock);
 
 		goto queue;
@@ -390,6 +398,11 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * barriers.
 	 */
 	if (val & _Q_LOCKED_MASK)
+		/*
+		 * 自旋等待锁持有者释放锁。这里判断条件为 val 字段的 locked 域是否为
+		 * 0 ，也就是锁持有者是否释放了锁。当锁持有者释放锁时， lock->val 中
+		 * 的 locked 域会被清零，会退出循环。
+		 */
 		atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_MASK));
 
 	/*
@@ -459,6 +472,11 @@ pv_queue:
 	 * if there was a previous node; link it and wait until reaching the
 	 * head of the waitqueue.
 	 */
+	/*
+	 * 如果旧的 lock->val 中的 tail 域有值，说明之前已经有别的 CPU 在 MCS
+	 * 等待队列中。需要把当前的节点添加到 MCS 等待队列末尾，然后等待前继节
+	 * 点释放锁，并且把锁传递给自己，这是 MCS 算法的特点
+	 */
 	if (old & _Q_TAIL_MASK) {
 		prev = decode_tail(old);
 
@@ -466,6 +484,13 @@ pv_queue:
 		WRITE_ONCE(prev->next, node);
 
 		pv_wait_node(node, prev);
+		/*
+		 * 当前节点会在自己的 MCS 节点中自旋并等待 node->locked 被设置为 1 。
+		 * 注意，这是 MCS 算法的优点，每个等待的线程都在本地的 MCS 节点上自
+		 * 旋，这样能够有效地缓解 CPU 高速缓存行颠簸现象。当前继节点把锁传递
+		 * 给当前节点时，当前 CPU 会从睡眠状态唤醒，然后退出
+		 * arch_mcs_spin_lock_contended()函数中的 while 循环。
+		 */
 		arch_mcs_spin_lock_contended(&node->locked);
 
 		/*
@@ -503,6 +528,10 @@ pv_queue:
 	if ((val = pv_wait_head_or_lock(lock, node)))
 		goto locked;
 
+	/*
+	 * 获取了 MCS 锁(node->locked=1)不代表可以获取自旋锁，还要等待锁持有者释
+	 * 放锁，即锁持有者把 lock->val 中的 locked 域和 pending 域清零
+	 */
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
 
 locked:
@@ -528,6 +557,7 @@ locked:
 	 *       PENDING will make the uncontended transition fail.
 	 */
 	if ((val & _Q_TAIL_MASK) == tail) {
+	/* 当前节点是 MCS 等待队列的唯一的节点 */
 		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
 			goto release; /* No contention */
 	}
@@ -537,14 +567,17 @@ locked:
 	 * which will then detect the remaining tail and queue behind us
 	 * ensuring we'll see a @next.
 	 */
+	/* MCS 等待队列中还有其他等待者 */
 	set_locked(lock);
 
 	/*
 	 * contended path; wait for next if not observed yet, release.
 	 */
 	if (!next)
+		/* 处理后继节点被删除的情况 */
 		next = smp_cond_load_relaxed(&node->next, (VAL));
 
+	/* 把锁传递给后继节点 */
 	arch_mcs_spin_unlock_contended(&next->locked);
 	pv_kick_node(lock, next);
 

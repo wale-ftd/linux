@@ -38,12 +38,14 @@
 #define MIN_GAP (SZ_128M)
 #define MAX_GAP	(STACK_TOP/6*5)
 
+/* 是否使用传统的虚拟地址空间布局 */
 static int mmap_is_legacy(struct rlimit *rlim_stack)
 {
 	if (current->personality & ADDR_COMPAT_LAYOUT)
 		return 1;
 
 	if (rlim_stack->rlim_cur == RLIM_INFINITY)
+	/* 用户栈可以无限增长 */
 		return 1;
 
 	return sysctl_legacy_va_layout;
@@ -83,6 +85,7 @@ static unsigned long mmap_base(unsigned long rnd, struct rlimit *rlim_stack)
  * This function, called very early during the creation of a new process VM
  * image, sets up which VM layout function to use:
  */
+/* 是这个 */
 void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 {
 	unsigned long random_factor = 0UL;
@@ -93,6 +96,15 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 	/*
 	 * Fall back to the standard layout if the personality bit is set, or
 	 * if the expected stack growth is unlimited:
+	 */
+	/*
+	 * 用户虚拟地址空间有两种布局，区别是内存映射区域的起始位置和增长方向不同。
+	 *   1.传统布局：内存映射区域自底向上增长，起始地址是 TASK_UNMAPPED_BASE ，
+	 *     每种处理器架构都要定义这个宏。默认启用内存映射区域随机化，需要把起始
+	 *     地址加上一个随机值。传统布局的缺点是堆的最大长度受到限制，在 32 位系
+	 *     统中影响比较大，但是在 64 位系统中这不是问题。
+	 *   2.新布局：内存映射区域自顶向下增长，起始地址是(STACK_TOP − 栈的最大长度
+	 *     − 间隙)。默认启用内存映射区域随机化，需要把起始地址减去一个随机值。
 	 */
 	if (mmap_is_legacy(rlim_stack)) {
 		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;

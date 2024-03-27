@@ -160,6 +160,10 @@ finish_or_fault:
  *   slab page or a secondary page from a compound page
  * - don't permit access to VMAs that don't support it, such as I/O mappings
  */
+/*
+ * 是一个分配物理内存的接口函数。它主要用于锁住内存(pin in memory)，即保证
+ * 用户空间分配的内存不会被释放。
+ */
 long get_user_pages(unsigned long start, unsigned long nr_pages,
 		    unsigned int gup_flags, struct page **pages,
 		    struct vm_area_struct **vmas)

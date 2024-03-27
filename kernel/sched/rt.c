@@ -1570,6 +1570,11 @@ pick_next_task_rt(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	if (prev->sched_class == &rt_sched_class)
 		update_curr_rt(rq);
 
+	/*
+	 * 如果实时运行队列没有加入运行队列(rt_rq.rt_queued 等于 0 ，如果在一个处
+	 * 理器上所有实时进程在一个周期内用完了运行时间，就会把实时运行队列从运行
+	 * 队列中删除)，那么返回空指针。
+	 */
 	if (!rt_rq->rt_queued)
 		return NULL;
 
@@ -2370,6 +2375,10 @@ static unsigned int get_rr_interval_rt(struct rq *rq, struct task_struct *task)
 		return 0;
 }
 
+/*
+* 调度策略为 SCHED_FIFO/SCHED_RR ，属于这个类的进程优先级为[0, 99]。用于普通的实时
+* 进程，如 IRQ 线程化
+*/
 const struct sched_class rt_sched_class = {
 	.next			= &fair_sched_class,
 	.enqueue_task		= enqueue_task_rt,

@@ -22,6 +22,7 @@ int housekeeping_any_cpu(enum hk_flags flags)
 }
 EXPORT_SYMBOL_GPL(housekeeping_any_cpu);
 
+/* 表示管家 CPU ，其余 CPU 用于无时钟内核特性 */
 const struct cpumask *housekeeping_cpumask(enum hk_flags flags)
 {
 	if (static_branch_unlikely(&housekeeping_overridden))

@@ -29,6 +29,10 @@ static inline void change_bit(unsigned int nr, volatile unsigned long *p)
 	atomic_long_xor(BIT_MASK(nr), (atomic_long_t *)p);
 }
 
+/*
+ * 设置 nr 位并返回旧值。注意：这个是原子操作，非原子操作的版本有"__"前缀，
+ * 如 __test_and_set_bit()
+ */
 static inline int test_and_set_bit(unsigned int nr, volatile unsigned long *p)
 {
 	long old;

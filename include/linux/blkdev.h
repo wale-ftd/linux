@@ -398,6 +398,7 @@ struct request_queue {
 	struct blk_queue_stats	*stats;
 	struct rq_qos		*rq_qos;
 
+	/* 如 zram_make_request() */
 	make_request_fn		*make_request_fn;
 	dma_drain_needed_fn	*dma_drain_needed;
 
@@ -468,6 +469,7 @@ struct request_queue {
 	/*
 	 * queue settings
 	 */
+	/* 请求的最大数目。可以通过下面方式修改： /sys/block/<device>/queue/nr_requests */
 	unsigned long		nr_requests;	/* Max # of requests */
 
 	unsigned int		dma_drain_size;
@@ -1640,6 +1642,7 @@ static inline unsigned int bio_integrity_bytes(struct blk_integrity *bi,
 struct block_device_operations {
 	int (*open) (struct block_device *, fmode_t);
 	void (*release) (struct gendisk *, fmode_t);
+	/* 如 zram_rw_page() */
 	int (*rw_page)(struct block_device *, sector_t, struct page *, unsigned int);
 	int (*ioctl) (struct block_device *, fmode_t, unsigned, unsigned long);
 	int (*compat_ioctl) (struct block_device *, fmode_t, unsigned, unsigned long);

@@ -43,7 +43,9 @@ void __lockfunc
 _raw_spin_unlock_irqrestore(raw_spinlock_t *lock, unsigned long flags)
 								__releases(lock);
 
+/* 有定义 */
 #ifdef CONFIG_INLINE_SPIN_LOCK
+/* 是这个 */
 #define _raw_spin_lock(lock) __raw_spin_lock(lock)
 #endif
 

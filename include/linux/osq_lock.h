@@ -6,6 +6,7 @@
  * An MCS like lock especially tailored for optimistic spinning for sleeping
  * lock implementations (mutex, rwsem, etc).
  */
+/* 用于定义 per cpu 的全局变量 */
 struct optimistic_spin_node {
 	struct optimistic_spin_node *next, *prev;
 	int locked; /* 1 if lock acquired */
@@ -17,6 +18,7 @@ struct optimistic_spin_queue {
 	 * Stores an encoded value of the CPU # of the tail node in the queue.
 	 * If the queue is empty, then it's set to OSQ_UNLOCKED_VAL.
 	 */
+	/* 保存 MCS 链表中最后一个申请锁的 CPU 编号(从 1 开始的值) */
 	atomic_t tail;
 };
 

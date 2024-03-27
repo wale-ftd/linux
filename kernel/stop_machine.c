@@ -120,6 +120,7 @@ static bool cpu_stop_queue_work(unsigned int cpu, struct cpu_stop_work *work)
  * -ENOENT if @fn(@arg) was not executed because @cpu was offline;
  * otherwise, the return value of @fn.
  */
+/* 向指定处理器添加停机工作，并且等待停机工作完成 */
 int stop_one_cpu(unsigned int cpu, cpu_stop_fn_t fn, void *arg)
 {
 	struct cpu_stop_done done;
@@ -353,6 +354,7 @@ int stop_two_cpus(unsigned int cpu1, unsigned int cpu2, cpu_stop_fn_t fn, void *
  * true if cpu_stop_work was queued successfully and @fn will be called,
  * false otherwise.
  */
+/* 向指定处理器添加停机工作，但是不等待停机工作完成 */
 bool stop_one_cpu_nowait(unsigned int cpu, cpu_stop_fn_t fn, void *arg,
 			struct cpu_stop_work *work_buf)
 {
@@ -490,6 +492,7 @@ static void cpu_stopper_thread(unsigned int cpu)
 repeat:
 	work = NULL;
 	raw_spin_lock_irq(&stopper->lock);
+	/* 由 stop_one_cpu()/stop_one_cpu_nowait()添加 work */
 	if (!list_empty(&stopper->works)) {
 		work = list_first_entry(&stopper->works,
 					struct cpu_stop_work, list);
@@ -506,6 +509,7 @@ repeat:
 		/* cpu stop callbacks must not sleep, make in_atomic() == T */
 		preempt_count_inc();
 		ret = fn(arg);
+		/* 如果发起请求的进程正在等待，那么发送处理完成的通知 */
 		if (done) {
 			if (ret)
 				done->ret = ret;
@@ -555,6 +559,7 @@ void stop_machine_unpark(int cpu)
 static struct smp_hotplug_thread cpu_stop_threads = {
 	.store			= &cpu_stopper.thread,
 	.thread_should_run	= cpu_stop_should_run,
+	/* 被 smpboot_thread_fn()调用 */
 	.thread_fn		= cpu_stopper_thread,
 	.thread_comm		= "migration/%u",
 	.create			= cpu_stop_create,

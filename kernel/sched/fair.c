@@ -527,6 +527,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
 /*
  * Enqueue an entity into the rb-tree:
  */
+/* 把调度实体添加到 CFS 就绪队列的红黑树中 */
 static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	struct rb_node **link = &cfs_rq->tasks_timeline.rb_root.rb_node;
@@ -624,6 +625,7 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 /*
  * delta /= w
  */
+/* 用于计算 vruntime */
 static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 {
 	if (unlikely(se->load.weight != NICE_0_LOAD))
@@ -640,8 +642,22 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
  *
  * p = (nr <= nl) ? l : l*nr/nl
  */
+/*
+ * 调度周期：在某个时间长度可以保证运行队列中的每个进程至少运行一次，我们把
+ * 这个时间长度称为调度周期。 CFS 的最小调度周期由 sysctl_sched_latency 定义，
+ * 默认值是 6ms ，可以通过文件"/proc/sys/kernel/sched_latency_ns"来调整
+ *
+ * 调度最小粒度：为了防止进程切换太频繁，进程被调度后应该至少运行一小段时间，
+ * 我们把这个时间长度称为调度最小粒度。 CFS 的调度最小粒度由
+ * sysctl_sched_min_granularity 定义，默认值是 0.75ms ，可以通过文件
+ * "/proc/sys/kernel/sched_min_granularity_ns"来调整。
+ */
 static u64 __sched_period(unsigned long nr_running)
 {
+	/*
+	 * 如果运行队列中的进程数量大于 8 ，那么调度周期等于调度最小粒度乘以进程
+	 * 数量，否则调度周期是 6ms
+	 */
 	if (unlikely(nr_running > sched_nr_latency))
 		return nr_running * sysctl_sched_min_granularity;
 	else
@@ -654,8 +670,20 @@ static u64 __sched_period(unsigned long nr_running)
  *
  * s = p*P[w/rw]
  */
+/*
+ * 根据当前进程的权重来计算在 CFS 就绪队列总权重中可以瓜分到的真实时间片。
+ * 公式：进程的时间片 = 调度周期 * 进程的权重 / 运行队列中所有进程的权重总和
+ */
 static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+    /*
+     * 计算 CFS 就绪队列中一个调度周期的长度，可以理解为一个调度周期的总时间
+     * 片，它根据当前运行的进程数量来计算。
+     *
+     * 为什么要加上 !se->on_rq ？因为如果 se 已经在 rq 上了的话，那么 nr_running
+     * 已经加过 1 了；如果 se 还不在 rq 上，那么计算调度周期的时候，需要将这个
+     * se 也算上
+     */
 	u64 slice = __sched_period(cfs_rq->nr_running + !se->on_rq);
 
 	for_each_sched_entity(se) {
@@ -681,6 +709,7 @@ static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
  *
  * vs = s/w
  */
+/* 根据 se 瓜分到的真实时间片计算对应的虚拟时间片 */
 static u64 sched_vslice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	return calc_delta_fair(sched_slice(cfs_rq, se), se);
@@ -799,6 +828,7 @@ static void update_tg_load_avg(struct cfs_rq *cfs_rq, int force)
 /*
  * Update the current task's runtime statistics.
  */
+/* 更新当前进程的真实运行时间、 vruntime 和就绪队列的 min_vruntime */
 static void update_curr(struct cfs_rq *cfs_rq)
 {
 	struct sched_entity *curr = cfs_rq->curr;
@@ -2997,6 +3027,7 @@ static void update_cfs_group(struct sched_entity *se)
 	long shares, runnable;
 
 	if (!gcfs_rq)
+	/* 不更新 task se  */
 		return;
 
 	if (throttled_hierarchy(gcfs_rq))
@@ -3593,6 +3624,7 @@ void remove_entity_load_avg(struct sched_entity *se)
 	raw_spin_unlock_irqrestore(&cfs_rq->removed.lock, flags);
 }
 
+/* 用于 SMP 负载均衡 */
 static inline unsigned long cfs_rq_runnable_load_avg(struct cfs_rq *cfs_rq)
 {
 	return cfs_rq->avg.runnable_load_avg;
@@ -3605,6 +3637,7 @@ static inline unsigned long cfs_rq_load_avg(struct cfs_rq *cfs_rq)
 
 static int idle_balance(struct rq *this_rq, struct rq_flags *rf);
 
+/* 用于获取进程需要的实际算力，主要用于 EAS 和 CPU 调频 */
 static inline unsigned long task_util(struct task_struct *p)
 {
 	return READ_ONCE(p->se.avg.util_avg);
@@ -3779,6 +3812,7 @@ static void check_spread(struct cfs_rq *cfs_rq, struct sched_entity *se)
 #endif
 }
 
+/* 根据情况对进程的虚拟时间进行奖罚 */
 static void
 place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 {
@@ -3791,10 +3825,15 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int initial)
 	 * stays open at the end.
 	 */
 	if (initial && sched_feat(START_DEBIT))
+    /*
+     * 对新创建的进程进行一些惩罚，因为新创建的进程导致 CFS 就绪队列的权重发
+     * 生了变化。惩罚时间根据新进程的权重由 sched_vslice()计算得到
+     */
 		vruntime += sched_vslice(cfs_rq, se);
 
 	/* sleeps up to a single latency don't count. */
 	if (!initial) {
+	/* 对刚被唤醒进程进行一定的补偿 */
 		unsigned long thresh = sysctl_sched_latency;
 
 		/*
@@ -3886,6 +3925,13 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * fairness detriment of existing tasks.
 	 */
 	if (renorm && !curr)
+        /*
+         * 对于新创建的进程(_do_fork() -> wake_up_new_task())，之前在
+         * task_fork_fair()函数中， vruntime 减去过 min_vruntime ，这里要加上
+         * min_vruntime 。因为 task_fork_fair()只创建进程，还没有把该进程加到
+         * 调度器中，期间 min_vruntime 已经发生变化，所以在这添加上
+         * min_vruntime 是比较准确的。
+         */
 		se->vruntime += cfs_rq->min_vruntime;
 
 	/*
@@ -3896,19 +3942,23 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 *     its group cfs_rq
 	 *   - Add its new weight to cfs_rq->load.weight
 	 */
+	/* 计算新进程的负载并更新整个 CFS 就绪队列的负载 */
 	update_load_avg(cfs_rq, se, UPDATE_TG | DO_ATTACH);
 	update_cfs_group(se);
 	enqueue_runnable_load_avg(cfs_rq, se);
 	account_entity_enqueue(cfs_rq, se);
 
 	if (flags & ENQUEUE_WAKEUP)
+        /* 对刚被唤醒进程进行一定的补偿 */
 		place_entity(cfs_rq, se, 0);
 
 	check_schedstat_required();
 	update_stats_enqueue(cfs_rq, se, flags);
 	check_spread(cfs_rq, se);
 	if (!curr)
+		/* 把该调度实体添加到 CFS 就绪队列的红黑树中 */
 		__enqueue_entity(cfs_rq, se);
+	/* 设置该调度实体的 on_rq 成员为 1 ，表示该进程已经在 CFS 就绪队列中 */
 	se->on_rq = 1;
 
 	if (cfs_rq->nr_running == 1) {
@@ -3987,6 +4037,10 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	clear_buddies(cfs_rq, se);
 
+	/*
+	 * 为什么有这个判断条件？因为当前运行的进程已经脱离了 rq 里的红黑树了(见
+	 * set_next_entity())
+	 */
 	if (se != cfs_rq->curr)
 		__dequeue_entity(cfs_rq, se);
 	se->on_rq = 0;
@@ -4026,9 +4080,12 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	struct sched_entity *se;
 	s64 delta;
 
+    /* 是理论运行时间，即该进程根据权重在一个调度周期里分到的实际运行时间 */
 	ideal_runtime = sched_slice(cfs_rq, curr);
 	delta_exec = curr->sum_exec_runtime - curr->prev_sum_exec_runtime;
 	if (delta_exec > ideal_runtime) {
+    /* 该进程实际运行时间已经超过了理论运行时间，需要让出 CPU */
+        /* 设置该进程 thread_info 中的 TIF_NEED_RESCHED 标志位 */
 		resched_curr(rq_of(cfs_rq));
 		/*
 		 * The current task ran long enough, ensure it doesn't get
@@ -4043,6 +4100,7 @@ check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 	 * narrow margin doesn't have to wait for a full slice.
 	 * This also mitigates buddy induced latencies under load.
 	 */
+	/* 实际运行时间小于系统定义的进程最短运行时间，不需要被调度出去 */
 	if (delta_exec < sysctl_sched_min_granularity)
 		return;
 
@@ -4207,6 +4265,7 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
 #endif
 
 	if (cfs_rq->nr_running > 1)
+        /* 当前 CPU 上处于可运行态的进程大于 1 个，需要检查当前进程是否需要调度 */
 		check_preempt_tick(cfs_rq, curr);
 }
 
@@ -5126,6 +5185,12 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	if (p->in_iowait)
 		cpufreq_update_util(rq, SCHED_CPUFREQ_IOWAIT);
 
+    /*
+     * 支持组调度时，第一次遍历的调度实体是进程本身的 p->se ，它对应的 cfs_rq
+     * 是组调度中的就绪队列，因为进程加入了组调度的就绪队列中。第二次遍历的调
+     * 度实体是组调度自身的 tg->se[] ，它对应的 cfs_rq 是系统本身的 CFS 就绪
+     * 队列。注意， CFS 的组调度机制可以支持 N 级。
+     */
 	for_each_sched_entity(se) {
 		if (se->on_rq)
 			break;
@@ -5699,6 +5764,11 @@ wake_affine_weight(struct sched_domain *sd, struct task_struct *p,
 	return this_eff_load < prev_eff_load ? this_cpu : nr_cpumask_bits;
 }
 
+/*
+ * 重新计算 wakeup_cpu 和 prev_cpu 的负载情况，并且比较使用哪个 CPU 来唤醒
+ * 进程是最合适的。如果 wakeup_cpu 的负载 + 唤醒进程的负载比 prev_cpu 的负
+ * 载小，那么使用 wakeup_cpu 来唤醒进程；否则，使用 prev_cpu 。
+ */
 static int wake_affine(struct sched_domain *sd, struct task_struct *p,
 		       int this_cpu, int prev_cpu, int sync)
 {
@@ -6247,6 +6317,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
  *
  * Return: the (estimated) utilization for the specified CPU
  */
+/* 获取 CPU 的实际算力，主要用于 EAS 和 CPU 调频 */
 static inline unsigned long cpu_util(int cpu)
 {
 	struct cfs_rq *cfs_rq;
@@ -6596,12 +6667,23 @@ fail:
  *
  * preempt must be disabled.
  */
+/* 选择最合适的调度域中最悠闲的 CPU */
 static int
 select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_flags)
 {
 	struct sched_domain *tmp, *sd = NULL;
+    /* 获取当前 CPU ，即执行唤醒 p 进程操作所在的 CPU ，也称为 wakeup_cpu */
 	int cpu = smp_processor_id();
+    /* prev_cpu 指该进程之前运行的 CPU */
 	int new_cpu = prev_cpu;
+    /*
+     * 表示有机会采用 wakeup_cpu 或者 prev_cpu 来唤醒进程 p ，是一个快速优化
+     * 路径。判断符合快速优化路径需要同时满足以下 3 个条件：
+     *   a. 是一个唤醒进程的动作，即 sd_flag 包含 SD_BALANCE_WAKE 标志位
+     *   b. wakeup_cpu 和 prev_cpu 在同一个调度域
+     *   c. 调度域包含 SD_WAKE_AFFINE 标志位，表示执行唤醒进程的 CPU 可以运
+     *      行这个被唤醒的进程
+     */
 	int want_affine = 0;
 	int sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
 
@@ -6620,6 +6702,7 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 	}
 
 	rcu_read_lock();
+    /* 从 wakeup_cpu 开始，从下至上遍历调度域 */
 	for_each_domain(cpu, tmp) {
 		if (!(tmp->flags & SD_LOAD_BALANCE))
 			break;
@@ -6633,6 +6716,8 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 			if (cpu != prev_cpu)
 				new_cpu = wake_affine(tmp, p, cpu, prev_cpu, sync);
 
+            /* 找到了合适的调度域里的 CPU 来唤醒进程 */
+
 			sd = NULL; /* Prefer wake_affine over balance flags */
 			break;
 		}
@@ -6645,10 +6730,12 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int sd_flag, int wake_f
 
 	if (unlikely(sd)) {
 		/* Slow path */
+        /* 未找到合适的调度域来唤醒进程，进入慢速路径。查找一个最悠闲的 CPU */
 		new_cpu = find_idlest_cpu(sd, p, cpu, prev_cpu, sd_flag);
 	} else if (sd_flag & SD_BALANCE_WAKE) { /* XXX always ? */
 		/* Fast path */
 
+        /* 在调度域里选择一个合适的 CPU */
 		new_cpu = select_idle_sibling(p, prev_cpu, new_cpu);
 
 		if (want_affine)
@@ -6771,6 +6858,11 @@ wakeup_preempt_entity(struct sched_entity *curr, struct sched_entity *se)
 	if (vdiff <= 0)
 		return -1;
 
+	/*
+	 * 如果(当前进程的虚拟运行时间 − 被唤醒的进程的虚拟运行时间)大于虚拟唤醒
+	 * 粒度，那么允许抢占，给当前进程设置需要重新调度的标志。
+	 * 虚拟唤醒粒度是唤醒粒度根据当前进程的权重转换成的虚拟时间。
+	 */
 	gran = wakeup_gran(se);
 	if (vdiff > gran)
 		return 1;
@@ -6861,9 +6953,15 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 	if (unlikely(p->policy != SCHED_NORMAL) || !sched_feat(WAKEUP_PREEMPTION))
 		return;
 
+	/*
+	 * 为当前进程和被唤醒的进程找到两个兄弟调度实体。
+	 * 是为 wakeup_preempt_entity 准备的。因为抢占只能在属于同一个任务组的
+	 * 两个兄弟调度实体之间判断。
+	 */
 	find_matching_se(&se, &pse);
 	update_curr(cfs_rq_of(se));
 	BUG_ON(!pse);
+	/* 判断是否可以抢占 */
 	if (wakeup_preempt_entity(se, pse) == 1) {
 		/*
 		 * Bias pick_next to pick the sched entity that is
@@ -9213,6 +9311,11 @@ update_next_balance(struct sched_domain *sd, unsigned long *next_balance)
  * least 1 task to be running on each physical CPU where possible, and
  * avoids physical / logical imbalances.
  */
+/*
+ * 公平调度类执行处理器负载均衡失败的时候，为最忙处理器设置主动负载均衡标志，
+ * 唤醒最忙处理器的迁移线程。函数 active_load_balance_cpu_stop() 负责执行主动
+ * 负载均衡
+ */
 static int active_load_balance_cpu_stop(void *data)
 {
 	struct rq *busiest_rq = data;
@@ -9234,6 +9337,7 @@ static int active_load_balance_cpu_stop(void *data)
 
 	/* Make sure the requested CPU hasn't gone down in the meantime: */
 	if (unlikely(busiest_cpu != smp_processor_id() ||
+		     /* 运行队列是否设置了主动负载均衡标志 */
 		     !busiest_rq->active_balance))
 		goto out_unlock;
 
@@ -9276,6 +9380,7 @@ static int active_load_balance_cpu_stop(void *data)
 		schedstat_inc(sd->alb_count);
 		update_rq_clock(busiest_rq);
 
+		/* 从当前处理器的运行队列中选择一个公平调度类的进程 */
 		p = detach_one_task(&env);
 		if (p) {
 			schedstat_inc(sd->alb_pushed);
@@ -9287,9 +9392,11 @@ static int active_load_balance_cpu_stop(void *data)
 	}
 	rcu_read_unlock();
 out_unlock:
+	/* 清除运行队列的主动负载均衡标志 */
 	busiest_rq->active_balance = 0;
 	rq_unlock(busiest_rq, &rf);
 
+	/* 把前面选中的进程迁移到目标处理器 */
 	if (p)
 		attach_one_task(target_rq, p);
 
@@ -10032,6 +10139,7 @@ static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
 	struct cfs_rq *cfs_rq;
 	struct sched_entity *se = &curr->se;
 
+	/* 从当前进程到根任务组的每级公平调度实体，调用函数 entity_tick */
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
 		entity_tick(cfs_rq, se, queued);
@@ -10060,11 +10168,13 @@ static void task_fork_fair(struct task_struct *p)
 	update_rq_clock(rq);
 
 	cfs_rq = task_cfs_rq(current);
+    /* 指父进程 */
 	curr = cfs_rq->curr;
 	if (curr) {
 		update_curr(cfs_rq);
 		se->vruntime = curr->vruntime;
 	}
+    /* cfs_rq 指父进程对应的 CFS 就绪队列， se 是新进程的调度实体 */
 	place_entity(cfs_rq, se, 1);
 
 	if (sysctl_sched_child_runs_first && curr && entity_before(curr, se)) {
@@ -10076,6 +10186,13 @@ static void task_fork_fair(struct task_struct *p)
 		resched_curr(rq);
 	}
 
+    /*
+     * 难道不用担心 vruntime 变得很小导致新进程恶意占用调度器吗？
+     *   1. 新进程还没有被添加到调度器中，加入调度器时会重新增加 min_vruntime
+     *   2. 新进程在上面的 place_entity()中得到了一定的惩罚，惩罚的虚拟时间由
+     *      sched_vslice()计算，在某种程度上这也是为了防止新进程恶意占用 CPU
+     *      时间。
+     */
 	se->vruntime -= cfs_rq->min_vruntime;
 	rq_unlock(rq, &rf);
 }
@@ -10277,6 +10394,7 @@ static void task_set_group_fair(struct task_struct *p)
 static void task_move_group_fair(struct task_struct *p)
 {
 	detach_task_cfs_rq(p);
+    /* 设置进程调度实体中的 cfs_rq 成员和 parent 成员 */
 	set_task_rq(p, task_cpu(p));
 
 #ifdef CONFIG_SMP
@@ -10329,6 +10447,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 	if (!tg->se)
 		goto err;
 
+    /* 临时初始化组的权重 */
 	tg->shares = NICE_0_LOAD;
 
 	init_cfs_bandwidth(tg_cfs_bandwidth(tg));
@@ -10345,6 +10464,7 @@ int alloc_fair_sched_group(struct task_group *tg, struct task_group *parent)
 			goto err_free_rq;
 
 		init_cfs_rq(cfs_rq);
+        /* 构建组调度关系 */
 		init_tg_cfs_entry(tg, cfs_rq, se, i, parent->se[i]);
 		init_entity_runnable_average(se);
 	}
@@ -10400,6 +10520,7 @@ void unregister_fair_sched_group(struct task_group *tg)
 	}
 }
 
+/* 构建组调度关系 */
 void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 			struct sched_entity *se, int cpu,
 			struct sched_entity *parent)
@@ -10502,6 +10623,10 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
 
 /*
  * All the scheduling class methods:
+ */
+/*
+ * 调度策略为 SCHED_NORMAL/SCHED_BATCH/SCHED_IDLE ，属于这个类的进程优先级为
+ * [100, 139]
  */
 const struct sched_class fair_sched_class = {
 	.next			= &idle_sched_class,

@@ -47,7 +47,9 @@ static inline void count_compact_events(enum vm_event_item item, long delta)
 
 #define block_start_pfn(pfn, order)	round_down(pfn, 1UL << (order))
 #define block_end_pfn(pfn, order)	ALIGN((pfn) + 1, 1UL << (order))
+/* 物理页号 pfn 所属页块的第一页 */
 #define pageblock_start_pfn(pfn)	block_start_pfn(pfn, pageblock_order)
+/* 物理页号 pfn 所属页块的下一个页块的第一页。 */
 #define pageblock_end_pfn(pfn)		block_end_pfn(pfn, pageblock_order)
 
 static unsigned long release_freepages(struct list_head *freelist)
@@ -154,17 +156,29 @@ void defer_compaction(struct zone *zone, int order)
 }
 
 /* Returns true if compaction should be skipped this time */
+/*
+ * 考虑到内存压力，并不是每次内存整理的请求都会得到应答。因为有可能前一次内存整理刚
+ * 做完或者没有整理出合适的内存，即使再做一次也没法腾出合适的空间，这样只会给系统带
+ * 来更大的负载。为了避免这种情况，引入了推迟整理的机制。推迟整理的目的是避免频繁或
+ * 无效的内存规整
+ */
 bool compaction_deferred(struct zone *zone, int order)
 {
 	unsigned long defer_limit = 1UL << zone->compact_defer_shift;
 
 	if (order < zone->compact_order_failed)
+    /* 整理的内存阶数 order 小于上次整理失败的阶数 compact_order_failed ，无需推迟 */
 		return false;
 
 	/* Avoid possible overflow */
+    /* 整理内存阶数大于等于上次整理失败的阶数，推迟计数 compact_considered 加 1 */
 	if (++zone->compact_considered > defer_limit)
 		zone->compact_considered = defer_limit;
 
+	/*
+	 * 推迟计数大于等于当前 zone 的推迟限制，无需推迟；否则推迟，因为近期可能已经
+	 * 进行过 compaction 了
+	 */
 	if (zone->compact_considered >= defer_limit)
 		return false;
 
@@ -202,6 +216,10 @@ bool compaction_restarting(struct zone *zone, int order)
 }
 
 /* Returns true if the pageblock should be scanned for pages to isolate. */
+/*
+ * 如果页块因为上次隔离失败被标记为跳过，并且调用者没有强制要求扫描标记为跳
+ * 过的页块(完全同步优先级需要扫描标记为跳过的页块)，那么跳过这个页块。
+ */
 static inline bool isolation_suitable(struct compact_control *cc,
 					struct page *page)
 {
@@ -567,6 +585,7 @@ isolate_fail:
 
 	/* Update the pageblock-skip if the whole pageblock was scanned */
 	if (blockpfn == end_pfn)
+        /* 内核认为刚做完整理下次不太适合立马再做整理 */
 		update_pageblock_skip(cc, valid_page, total_isolated, false);
 
 	cc->total_free_scanned += nr_scanned;
@@ -657,6 +676,7 @@ isolate_freepages_range(struct compact_control *cc,
 }
 
 /* Similar to reclaim, but different enough that they don't share logic */
+/* 判断当前 zone 从 LRU 链表分离出来的页面是否比较多 */
 static bool too_many_isolated(struct zone *zone)
 {
 	unsigned long active, inactive, isolated;
@@ -689,6 +709,7 @@ static bool too_many_isolated(struct zone *zone)
  * and cc->nr_migratepages is updated accordingly. The cc->migrate_pfn field
  * is neither read nor updated.
  */
+/* 用于隔离一个页块里面的可移动页 */
 static unsigned long
 isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 			unsigned long end_pfn, isolate_mode_t isolate_mode)
@@ -701,6 +722,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 	struct page *page = NULL, *valid_page = NULL;
 	unsigned long start_pfn = low_pfn;
 	bool skip_on_failure = false;
+    /* 步长是 1<<order ，order 是请求 compaction 的大小 */
 	unsigned long next_skip_pfn = 0;
 
 	/*
@@ -722,12 +744,19 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 	if (compact_should_abort(cc))
 		return 0;
 
+    /*
+     * 小优化。页面分配器的慢速路径中进入。以起始扫描页帧号为起点，以 2 的
+     * cc->order 次幂个连续页面为终点，在这个范围内，若发现不适合做内存规整
+     * 的页面，就跳出这个范围。因为目的是分配出 2 的 cc->order 次幂个连续页
+     * 面。
+     */
 	if (cc->direct_compaction && (cc->mode == MIGRATE_ASYNC)) {
 		skip_on_failure = true;
 		next_skip_pfn = block_end_pfn(low_pfn, cc->order);
 	}
 
 	/* Time to isolate some pages for migration */
+    /* 函数的核心处理部分：扫描页块中所有的页帧，寻找可以迁移的页面 */
 	for (; low_pfn < end_pfn; low_pfn++) {
 
 		if (skip_on_failure && low_pfn >= next_skip_pfn) {
@@ -777,7 +806,9 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * the worst thing that can happen is that we skip some
 		 * potential isolation targets.
 		 */
+		/* 如果该页面还在伙伴系统中，那么该页面不适合迁移，跳过它 */
 		if (PageBuddy(page)) {
+		/* 页属于 buddy 系统中，说明是空闲的页 */
 			unsigned long freepage_order = page_order_unsafe(page);
 
 			/*
@@ -797,7 +828,13 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * racy, but we can consider only valid values and the only
 		 * danger is skipping too much.
 		 */
+		/*
+		 * 一般情况，可以被 compact 的页面是可以不连续的。对于复合页，
+		 * 它要求是连续的，所以如果要移动，那目标位置也要有连续的空闲
+		 * 页才行
+		 */
 		if (PageCompound(page)) {
+        /* compound page 不适合做 compaction */
 			const unsigned int order = compound_order(page);
 
 			if (likely(order < MAX_ORDER))
@@ -810,10 +847,21 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 * It's possible to migrate LRU and non-lru movable pages.
 		 * Skip any other type of page
 		 */
+		/*
+		 * 不在 LRU 链表上的可移动页(包括 KVM 虚拟机的内存气球(memory
+		 * balloon)里面的页和压缩页内存分配器 zsmalloc 使用的页)，那么调
+		 * 用函数 isolate_movable_page 来隔离页。
+		 */
 		if (!PageLRU(page)) {
+        /* 不在 LRU 链表的页面不适合做 compaction */
 			/*
 			 * __PageMovable can return false positive so we need
 			 * to verify it under page_lock.
+			 */
+			/*
+			 * 特殊情况： movable 的非 LRU 页面并且还没有分离的页面是可以迁移的。
+			 * 这些页面通常是特殊的可迁移页面，如根据 zsmalloc 机制分配的页面或者
+			 * virtio-balloon 页面等
 			 */
 			if (unlikely(__PageMovable(page)) &&
 					!PageIsolated(page)) {
@@ -823,6 +871,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 					locked = false;
 				}
 
+                /* 会调用驱动程序提供的方法分离页面 */
 				if (!isolate_movable_page(page, isolate_mode))
 					goto isolate_success;
 			}
@@ -837,16 +886,34 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		 */
 		if (!page_mapping(page) &&
 		    page_count(page) > page_mapcount(page))
+        /*
+         * 如果是匿名页，引用计数大于映射计数，说明内核的某个地方正在访问这个匿名页，
+		 * 那么不能移动。若 page_mapping 返回 NULL ，说明该页面是一个匿名页面，因为
+         * 它的 page->mapping 指向 anon_vma 数据结构，而不是一个地址空间描述符。对
+         * 于匿名页面来说，通常情况下 page_count == page_mapcount ，即
+         * page->refcount == page->_mapcount + 1 。如果它们不相等，说明内核中使用
+         * 了这个匿名页面，所以这种匿名页面也不适合迁移。可能有人调用了
+         * get_user_pages()函数来锁住这个页面。
+         */
 			goto isolate_fail;
 
 		/*
 		 * Only allow to migrate anonymous pages in GFP_NOFS context
 		 * because those do not depend on fs locks.
 		 */
+		/*
+		 * 如果是文件页，但是调用者不允许调用文件系统的接口(文件系统申请页，
+		 * 页分配器执行内存碎片整理，如果调用文件系统的接口，可能导致死锁)，
+		 * 那么不能移动。
+		 */
 		if (!(cc->gfp_mask & __GFP_FS) && page_mapping(page))
 			goto isolate_fail;
 
 		/* If we already hold the lock, we can skip some rechecking */
+		/*
+		 * 如果没有持有锁，那么申请锁，然后重新做一些检查。因为在没有持有锁
+		 * 的情况下判断可能不准确。
+		 */
 		if (!locked) {
 			locked = compact_trylock_irqsave(zone_lru_lock(zone),
 								&flags, cc);
@@ -877,11 +944,13 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 		VM_BUG_ON_PAGE(PageCompound(page), page);
 
 		/* Successfully isolated */
+		/* 把页从 LRU 链表中删除 */
 		del_page_from_lru_list(page, lruvec, page_lru(page));
 		inc_node_page_state(page,
 				NR_ISOLATED_ANON + page_is_file_cache(page));
 
 isolate_success:
+        /* 页面被成功分离之后，把页添加到迁移扫描器的可移动页链表中 */
 		list_add(&page->lru, &cc->migratepages);
 		cc->nr_migratepages++;
 		nr_isolated++;
@@ -893,9 +962,11 @@ isolate_success:
 		 * then freed by migration.
 		 */
 		if (!cc->last_migrated_pfn)
+            /* 把当前页帧号更新到 last_migrated_pfn */
 			cc->last_migrated_pfn = low_pfn;
 
 		/* Avoid isolating too much */
+		/* 避免一次隔离太多页，如果已经隔离了 32 页，那么停止 */
 		if (cc->nr_migratepages == COMPACT_CLUSTER_MAX) {
 			++low_pfn;
 			break;
@@ -947,6 +1018,7 @@ isolate_fail:
 	 * if the whole pageblock was scanned without isolating any page.
 	 */
 	if (low_pfn == end_pfn)
+        /* 内核认为刚做完整理下次不太适合立马再做整理 */
 		update_pageblock_skip(cc, valid_page, nr_isolated, true);
 
 	trace_mm_compaction_isolate_migratepages(start_pfn, low_pfn,
@@ -1008,6 +1080,7 @@ isolate_migratepages_range(struct compact_control *cc, unsigned long start_pfn,
 #endif /* CONFIG_COMPACTION || CONFIG_CMA */
 #ifdef CONFIG_COMPACTION
 
+/* 判断页块的迁移类型是否适合 */
 static bool suitable_migration_source(struct compact_control *cc,
 							struct page *page)
 {
@@ -1016,8 +1089,15 @@ static bool suitable_migration_source(struct compact_control *cc,
 	if ((cc->mode != MIGRATE_ASYNC) || !cc->direct_compaction)
 		return true;
 
+	/* (cc->mode == MIGRATE_ASYNC) && cc->direct_compaction */
+
 	block_mt = get_pageblock_migratetype(page);
 
+	/*
+	 * 如果申请可移动类型的页，页块的类型必须是 CMA 类型(CMA 是连续内存分配器，
+	 * 只允许可移动类型盗用 CMA 类型的页)或可移动类型；如果申请其他类型的页，页
+	 * 块的类型必须和申请的类型相同。
+	 */
 	if (cc->migratetype == MIGRATE_MOVABLE)
 		return is_migrate_movable(block_mt);
 	else
@@ -1064,6 +1144,7 @@ static inline bool compact_scanners_met(struct compact_control *cc)
  * Based on information in the current compact_control, find blocks
  * suitable for isolating free pages from and then isolate them.
  */
+/* 把空闲页面添加到 cc->freepages 链表中 */
 static void isolate_freepages(struct compact_control *cc)
 {
 	struct zone *zone = cc->zone;
@@ -1151,6 +1232,10 @@ static void isolate_freepages(struct compact_control *cc)
 	}
 
 	/* __isolate_free_page() does not map the pages */
+    /*
+     * 将 freelist 中的页面拆分成一个个页面，因为前面 freelist 里元素大小可能是
+     * 1<<order 个页面(是从 zone->free_area[order] 里取的
+     */
 	map_pages(freelist);
 
 	/*
@@ -1178,6 +1263,7 @@ static struct page *compaction_alloc(struct page *migratepage,
 	 */
 	if (list_empty(&cc->freepages)) {
 		if (!cc->contended)
+            /* 把空闲页面添加到 cc->freepages 链表中 */
 			isolate_freepages(cc);
 
 		if (list_empty(&cc->freepages))
@@ -1222,6 +1308,7 @@ int sysctl_compact_unevictable_allowed __read_mostly = 1;
  * starting at the block pointed to by the migrate scanner pfn within
  * compact_control.
  */
+/* 扫描并且寻找 zone 中可迁移的页面，并将这些页面添加到 cc->migratepages 中 */
 static isolate_migrate_t isolate_migratepages(struct zone *zone,
 					struct compact_control *cc)
 {
@@ -1249,6 +1336,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	 * Iterate over whole pageblocks until we find the first suitable.
 	 * Do not cross the free scanner.
 	 */
+	/* 扫描步长是按照页块大小为单位来进行的 */
 	for (; block_end_pfn <= cc->free_pfn;
 			low_pfn = block_end_pfn,
 			block_start_pfn = block_end_pfn,
@@ -1259,10 +1347,12 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 		 * many pageblocks unsuitable, so periodically check if we
 		 * need to schedule, or even abort async compaction.
 		 */
+		/* 每次扫描完 32 个页块，检查进程调度器是否需要重新调度进程 */
 		if (!(low_pfn % (SWAP_CLUSTER_MAX * pageblock_nr_pages))
 						&& compact_should_abort(cc))
 			break;
 
+        /* 检查页块的第一页和最后一页是不是都属于当前内存区域，返回这个页块中第一个物理页面 */
 		page = pageblock_pfn_to_page(block_start_pfn, block_end_pfn,
 									zone);
 		if (!page)
@@ -1277,10 +1367,12 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 		 * Async compaction is optimistic to see if the minimum amount
 		 * of work satisfies the allocation.
 		 */
+		/* 判断页块的迁移类型 */
 		if (!suitable_migration_source(cc, page))
 			continue;
 
 		/* Perform the isolation */
+		/* 找到第一个合适的页块后，隔离页块里面的可移动页 */
 		low_pfn = isolate_migratepages_block(cc, low_pfn,
 						block_end_pfn, isolate_mode);
 
@@ -1305,6 +1397,10 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
  * order == -1 is expected when compacting via
  * /proc/sys/vm/compact_memory
  */
+/*
+ * 如果参数 order 是 −1 ，表示内存碎片整理是通过文件 /proc/sys/vm/compact_memory
+ * 触发的，那么内存区域强制执行内存碎片整理。
+ */
 static inline bool is_via_compact_memory(int order)
 {
 	return order == -1;
@@ -1321,6 +1417,11 @@ static enum compact_result __compact_finished(struct zone *zone,
 
 	/* Compaction run completes if the migrate and free scanner meet */
 	if (compact_scanners_met(cc)) {
+	/*
+	 * 如果迁移扫描器和空闲扫描器相遇，那么内存碎片整理完成。如果扫描整
+	 * 个内存区域，那么返回 COMPACT_COMPLETE ；如果只扫描内存区域的一部
+	 * 分，那么返回 COMPACT_PARTIAL_SKIPPED 。
+	 */
 		/* Let the next compaction start anew. */
 		reset_cached_positions(zone);
 
@@ -1340,6 +1441,10 @@ static enum compact_result __compact_finished(struct zone *zone,
 	}
 
 	if (is_via_compact_memory(cc->order))
+	/*
+	 * 通过写文件 /proc/sys/vm/compact_memory 触发内存碎片整理，结束的
+	 * 唯一条件是迁移扫描器和空闲扫描器相遇
+	 */
 		return COMPACT_CONTINUE;
 
 	if (cc->finishing_block) {
@@ -1350,10 +1455,15 @@ static enum compact_result __compact_finished(struct zone *zone,
 		if (IS_ALIGNED(cc->migrate_pfn, pageblock_nr_pages))
 			cc->finishing_block = false;
 		else
+			/* 为了避免从备用迁移类型盗用页(见后面的代码)，应该把当前页块处理完 */
 			return COMPACT_CONTINUE;
 	}
 
 	/* Direct compactor: Is a suitable page free? */
+	/*
+	 * 迁移扫描器和空闲扫描器没有相遇，但是申请或备用的迁移类型至少有
+	 * 一个足够大的空闲页块，那么内存碎片整理结束。
+	 */
 	for (order = cc->order; order < MAX_ORDER; order++) {
 		struct free_area *area = &zone->free_area[order];
 		bool can_steal;
@@ -1390,6 +1500,7 @@ static enum compact_result __compact_finished(struct zone *zone,
 			if (cc->mode == MIGRATE_ASYNC ||
 					IS_ALIGNED(cc->migrate_pfn,
 							pageblock_nr_pages)) {
+			/* 到此，说明当前页块处理完了(见前面的 migrate_pfn 对齐判断) */
 				return COMPACT_SUCCESS;
 			}
 
@@ -1401,6 +1512,7 @@ static enum compact_result __compact_finished(struct zone *zone,
 	return COMPACT_NO_SUITABLE_PAGE;
 }
 
+/* 判断 compaction 是否完成 */
 static enum compact_result compact_finished(struct zone *zone,
 			struct compact_control *cc)
 {
@@ -1421,6 +1533,11 @@ static enum compact_result compact_finished(struct zone *zone,
  *   COMPACT_SUCCESS  - If the allocation would succeed without compaction
  *   COMPACT_CONTINUE - If compaction should run now
  */
+/*
+ * 内存碎片整理需要申请空闲页，如果(空闲页数 − 两倍的申请页数)小于或等于水
+ * 线(如果是昂贵的分配，使用 low 水线；否则使用 min 水线)，说明空闲页太少，
+ * 那么内存区域不适合执行内存碎片整理。
+ */
 static enum compact_result __compaction_suitable(struct zone *zone, int order,
 					unsigned int alloc_flags,
 					int classzone_idx,
@@ -1429,8 +1546,16 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
 	unsigned long watermark;
 
 	if (is_via_compact_memory(order))
+    /* 在手动触发场景， order 为 -1 */
 		return COMPACT_CONTINUE;
 
+    /*
+     * alloc_flags 需要考虑几种场景：
+     *   1. 若使用 kcompactd 内核线程，那么 alloc_flags 被初始化为 0 ，因此采用 min
+     *      水位作为判断条件。
+     *   2. 若分配内存失败，进入慢速路径， alloc_flags 被设置为 min 水位，因为在慢速
+     *      路径上， alloc_flags 已经设置为 min 水位了。
+     */
 	watermark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
 	/*
 	 * If watermarks for high-order allocation are already met, there
@@ -1438,6 +1563,10 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
 	 */
 	if (zone_watermark_ok(zone, order, watermark, classzone_idx,
 								alloc_flags))
+	/*
+	 * 如果(空闲页数 − 申请页数)大于或等于水线，并且至少有一个足够大的
+	 * 空闲页块，那么内存区域不需要执行内存碎片整理。
+	 */
 		return COMPACT_SUCCESS;
 
 	/*
@@ -1457,13 +1586,17 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
 	watermark = (order > PAGE_ALLOC_COSTLY_ORDER) ?
 				low_wmark_pages(zone) : min_wmark_pages(zone);
 	watermark += compact_gap(order);
+    /* 以 order 为 0 来判断 zone 是否在 watermark 之上 */
 	if (!__zone_watermark_ok(zone, 0, watermark, classzone_idx,
 						ALLOC_CMA, wmark_target))
+		/* 说明这个 zone 中只有很少的空闲页面，不适合做内存规整，需要跳过。 */
 		return COMPACT_SKIPPED;
 
+    /* 表示可以做内存规整 */
 	return COMPACT_CONTINUE;
 }
 
+/* 根据当前的 zone 水位来判断是否合适做 comapction */
 enum compact_result compaction_suitable(struct zone *zone, int order,
 					unsigned int alloc_flags,
 					int classzone_idx)
@@ -1489,7 +1622,13 @@ enum compact_result compaction_suitable(struct zone *zone, int order,
 	 * excessive compaction for costly orders, but it should not be at the
 	 * expense of system stability.
 	 */
+	/*
+	 * 对于昂贵的分配，计算碎片指数，如果碎片指数在范围[0，外部碎片的阈值]
+	 * 以内，说明分配失败是内存不足导致的，不是外部碎片导致的，那么内存区
+	 * 域不适合执行内存碎片整理。
+	 */
 	if (ret == COMPACT_CONTINUE && (order > PAGE_ALLOC_COSTLY_ORDER)) {
+        /* 反碎片化检测 */
 		fragindex = fragmentation_index(zone, order);
 		if (fragindex >= 0 && fragindex <= sysctl_extfrag_threshold)
 			ret = COMPACT_NOT_SUITABLE_ZONE;
@@ -1534,6 +1673,32 @@ bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 	return false;
 }
 
+/*
+ * compact 是基于 zone 来进行扫描和规整的，并且是以 pageblock 为单位的。
+ * 只能处理三种迁移类型 MOVABLE ， CMA 和 RECLAIMABLE 。
+ * 有两类页面适合做 compation ：标准的 LRU 页面和非 LRU 页面。但是对于标准的 LRU 页
+ * 面，以下情况不适合做 compaction ：
+ *   1. 在伙伴系统中的页面
+ *   2. compound page
+ *   3. 不在 LRU 链表中的页面
+ *   4. pin 住的匿名页面
+ *   5. 标记了 PG_unevictable 的页面
+ *   6. 对于异步模式，
+ *     a. 获取 lru lock 自旋锁失败的页面
+ *     b. 正在回写中的页面(__isolate_lru_page())
+ *     c. 没有定义 mapping->a_ops_migratepage()方法的脏页(__isolate_lru_page())
+ *
+ * 核心函数，主要用于"兵分两路"扫描一个 zone ，找出可以迁移的页面以及空闲页面。这两
+ * 路"兵"会在 zone 的中间汇合，然后调用页面迁移的接口函数进行页面迁移，最终整理出大
+ * 块空闲页面。
+ *
+ * 整理停止：
+ *   1. 当 migrate 扫描器的扫描 pageblock 地址 migrete_pfn 大于等于 free 扫描器的的
+ *      扫描地址 free_pfn 时
+ *   2. 开启 proactive_compaction 情况下，碎片分数小于低水位碎片分数时
+ *   3. free_area 中已经可以分配出对应迁移类型的内存，或者备份 fallback 迁移类型中存
+ *      在对应大小的内存
+ */
 static enum compact_result compact_zone(struct zone *zone, struct compact_control *cc)
 {
 	enum compact_result ret;
@@ -1565,9 +1730,20 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 	 * by ensuring the values are within zone boundaries.
 	 */
 	if (cc->whole_zone) {
+	/*
+	 * 如果扫描整个 zone ，那么迁移扫描器的起始物理页号是 zone 的第一页，
+	 * 空闲扫描器的起始物理页号是最后一个页块的第一页。
+	 */
 		cc->migrate_pfn = start_pfn;
+        /* 是最后一个页块的起始地址 */
 		cc->free_pfn = pageblock_start_pfn(end_pfn - 1);
 	} else {
+	/*
+	 * 如果不需要扫描整个 zone ，那么迁移扫描器的起始物理页号是
+	 * zone->compact_cached_migrate_pfn[sync](sync 为 1 表示同步模式， sync
+	 * 为 0 表示异步模式)，空闲扫描器的起始物理页号是
+	 * zone->compact_cached_free_pfn 。
+	 */
 		cc->migrate_pfn = zone->compact_cached_migrate_pfn[sync];
 		cc->free_pfn = zone->compact_cached_free_pfn;
 		if (cc->free_pfn < start_pfn || cc->free_pfn >= end_pfn) {
@@ -1591,9 +1767,12 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 
 	migrate_prep_local();
 
+    /* 核心处理部分 */
 	while ((ret = compact_finished(zone, cc)) == COMPACT_CONTINUE) {
 		int err;
 
+        /* 扫描并且寻找 zone 中可迁移的页面，并将这些页面添加到 cc->migratepages 中 */
+		/* 隔离可移动页，把可移动页添加到迁移扫描器的可移动页链表中 */
 		switch (isolate_migratepages(zone, cc)) {
 		case ISOLATE_ABORT:
 			ret = COMPACT_CONTENDED;
@@ -1611,6 +1790,10 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 			;
 		}
 
+		/*
+		 * 把可移动页移到内存区域顶部的空闲页。其中 compaction_alloc 会隔离
+		 * 出空闲页
+		 */
 		err = migrate_pages(&cc->migratepages, compaction_alloc,
 				compaction_free, (unsigned long)cc, cc->mode,
 				MR_COMPACTION);
@@ -1621,6 +1804,8 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 		/* All pages were either migrated or will be released */
 		cc->nr_migratepages = 0;
 		if (err) {
+        /* 处理页面迁移不成功的情况 */
+            /* 把前面分离的可迁移页面重新添加到 LRU 链表中 */
 			putback_movable_pages(&cc->migratepages);
 			/*
 			 * migrate_pages() may return -ENOMEM when scanners meet
@@ -1675,6 +1860,7 @@ out:
 	 * so we don't leave any returned pages behind in the next attempt.
 	 */
 	if (cc->nr_freepages > 0) {
+        /* 将未用完的空闲页面(前面 isolate_freepages() 分离出来的)放回伙伴系统中 */
 		unsigned long free_pfn = release_freepages(&cc->freepages);
 
 		cc->nr_freepages = 0;
@@ -1698,6 +1884,10 @@ out:
 	return ret;
 }
 
+/*
+ * 该函数用于 direct compact ，随着 direct compact 的失败， prio 会逐渐提升(从
+ * COMPACT_PRIO_ASYNC 提升到 MIN_COMPACT_PRIORITY)， compact 强度也会相应增加
+ */
 static enum compact_result compact_zone_order(struct zone *zone, int order,
 		gfp_t gfp_mask, enum compact_priority prio,
 		unsigned int alloc_flags, int classzone_idx)
@@ -1708,16 +1898,34 @@ static enum compact_result compact_zone_order(struct zone *zone, int order,
 		.nr_migratepages = 0,
 		.total_migrate_scanned = 0,
 		.total_free_scanned = 0,
+		/* 指定了 compact 的目标 order ，降低了范围和难度 */
 		.order = order,
 		.gfp_mask = gfp_mask,
 		.zone = zone,
+		/*
+		 * 随着 direct compact 的失败， mode 从 MIGRATE_ASYNC 变为
+		 * MIGRATE_SYNC_LIGHT ，即 direct compact 可能是不阻塞也可能是阻塞
+		 */
 		.mode = (prio == COMPACT_PRIO_ASYNC) ?
 					MIGRATE_ASYNC :	MIGRATE_SYNC_LIGHT,
 		.alloc_flags = alloc_flags,
+		/* 指定了 highest_zoneidx 和 order ，所以会有水位判断 */
 		.classzone_idx = classzone_idx,
 		.direct_compaction = true,
+		/*
+		 * 随着 direct compact 的失败， compact 范围从根据上次 compact 结果来制
+		 * 定范围变为完整 zone 地址范围
+		 */
 		.whole_zone = (prio == MIN_COMPACT_PRIORITY),
+		/*
+		 * 随着 direct compact 的失败， pageblock 将会被重新扫描，不会根据标记
+		 * skip ，逐步加强规整强度
+		 */
 		.ignore_skip_hint = (prio == MIN_COMPACT_PRIORITY),
+		/*
+		 * 随着 direct compact 的失败，空闲页扫描器将变得严格，空闲页必须来自于
+		 * MIGRATE_MOVABLE 和 MIGRATE_CMA 可移动的页面
+		 */
 		.ignore_block_suitable = (prio == MIN_COMPACT_PRIORITY)
 	};
 	INIT_LIST_HEAD(&cc.freepages);
@@ -1756,6 +1964,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 	 * Check if the GFP flags allow compaction - GFP_NOIO is really
 	 * tricky context because the migration might require IO
 	 */
+	/* 调用者不允许写存储设备，那么不执行内存碎片整理 */
 	if (!may_perform_io)
 		return COMPACT_SKIPPED;
 
@@ -1766,17 +1975,30 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 								ac->nodemask) {
 		enum compact_result status;
 
+		/* 推迟判断，因为当前 zone 不适合进行 compact */
 		if (prio > MIN_COMPACT_PRIORITY
 					&& compaction_deferred(zone, order)) {
+		/* defer compaction */
+		/*
+		 * 内存碎片整理的优先级不是完全同步，并且应该推迟，则该 zone 推迟
+		 * compaction 。因为应该推迟时还强行 compaction ，很大可能会失败，
+		 * 对于非完全同步模式，没必要做这种无用功。
+		 */
 			rc = max_t(enum compact_result, COMPACT_DEFERRED, rc);
 			continue;
 		}
 
+        /* 在 zone 上进行 compact */
 		status = compact_zone_order(zone, order, gfp_mask, prio,
 					alloc_flags, ac_classzone_idx(ac));
 		rc = max(status, rc);
 
 		/* The allocation should succeed, stop compacting */
+		/*
+		 * 如果内存碎片整理执行成功，即（空闲页数 − 申请页数）大于或等于水
+		 * 线，并且至少有一个足够大的空闲页块，那么更新推迟信息，并且不再继
+		 * 续执行内存碎片整理。
+		 */
 		if (status == COMPACT_SUCCESS) {
 			/*
 			 * We think the allocation will succeed in this zone,
@@ -1784,11 +2006,19 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			 * will repeat this with true if allocation indeed
 			 * succeeds in this zone.
 			 */
+			/*
+			 * compaction 成功，重置 defer 计数。即降低此 zone 推迟标准，让后续
+			 * 对 zone compaction 判断变得更为容易
+			 */
 			compaction_defer_reset(zone, order, false);
 
 			break;
 		}
 
+		/*
+		 * 如果内存碎片整理的优先级不是异步模式，并且迁移扫描器和空闲扫描器
+		 * 在内存区域中间相遇，那么更新推迟信息。
+		 */
 		if (prio != COMPACT_PRIO_ASYNC && (status == COMPACT_COMPLETE ||
 					status == COMPACT_PARTIAL_SKIPPED))
 			/*
@@ -1796,12 +2026,20 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			 * so we defer compaction there. If it ends up
 			 * succeeding after all, it will be reset.
 			 */
+			/*
+			 * compaction 失败，增大此 zone 推迟标准，让后续对 zone compaction 将
+			 * 会推迟更多次
+			 */
 			defer_compaction(zone, order);
 
 		/*
 		 * We might have stopped compacting due to need_resched() in
 		 * async compaction, or due to a fatal signal detected. In that
 		 * case do not try further zones
+		 */
+		/*
+		 * 如果内存碎片整理的优先级是异步模式并且进程调度器需要重新调度进程，
+		 * 或者当前进程收到致命的信号，那么停止执行内存碎片整理。
 		 */
 		if ((prio == COMPACT_PRIO_ASYNC && need_resched())
 					|| fatal_signal_pending(current))
@@ -1915,6 +2153,7 @@ void compaction_unregister_node(struct node *node)
 
 static inline bool kcompactd_work_requested(pg_data_t *pgdat)
 {
+    /* 虽然线程需要停止，但是设计逻辑还是会触发一次 compaction */
 	return pgdat->kcompactd_max_order > 0 || kthread_should_stop();
 }
 
@@ -1952,6 +2191,10 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 		.total_free_scanned = 0,
 		.classzone_idx = pgdat->kcompactd_classzone_idx,
 		.mode = MIGRATE_SYNC_LIGHT,
+		/*
+		 * 不会忽略被标记为 PB_migrate_skip 的 pageblock ，即在整理退出之前所有的页
+		 * 面都会被扫描一遍
+		 */
 		.ignore_skip_hint = false,
 		.gfp_mask = GFP_KERNEL,
 	};

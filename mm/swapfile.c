@@ -4,6 +4,15 @@
  *  Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
  *  Swap reorganised 29.12.95, Stephen Tweedie
  */
+/*
+ * 1.激活 swap 分区 --- swapon
+ * 2.swap out ：
+ *     add_to_swap_cache()
+ *     try_to_unmap()
+ *     pageout()
+ * 3.swap in ：
+ *     do_swap_page()
+ */
 
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
@@ -50,7 +59,9 @@ static void free_swap_count_continuations(struct swap_info_struct *);
 static sector_t map_swap_entry(swp_entry_t, struct block_device**);
 
 DEFINE_SPINLOCK(swap_lock);
+/* 系统自启动以来，打开 swapfile 的数量 */
 static unsigned int nr_swapfiles;
+/* 交换区剩余的空间 */
 atomic_long_t nr_swap_pages;
 /*
  * Some modules use swappable objects and may try to swap them out under
@@ -731,6 +742,7 @@ static int scan_swap_map_slots(struct swap_info_struct *si,
 	}
 
 	if (unlikely(!si->cluster_nr--)) {
+	/* 查找新的 cluster */
 		if (si->pages - si->inuse_pages < SWAPFILE_CLUSTER) {
 			si->cluster_nr = SWAPFILE_CLUSTER - 1;
 			goto checks;
@@ -1209,6 +1221,10 @@ static void swap_entry_free(struct swap_info_struct *p, swp_entry_t entry)
 /*
  * Caller has made sure that the swap device corresponding to entry
  * is still around or has not been recycled.
+ */
+/*
+ * decrements the relevant counter in the swap map. When the count reaches zero,
+ * the slot is effectively free.
  */
 void swap_free(swp_entry_t entry)
 {
@@ -2261,6 +2277,7 @@ static sector_t map_swap_entry(swp_entry_t entry, struct block_device **bdev)
 	sis = swap_info[swp_type(entry)];
 	*bdev = sis->bdev;
 
+	/* 目标 slot index */
 	offset = swp_offset(entry);
 	start_se = sis->curr_swap_extent;
 	se = start_se;
@@ -2396,10 +2413,13 @@ static int setup_swap_extents(struct swap_info_struct *sis, sector_t *span)
 	int ret;
 
 	if (S_ISBLK(inode->i_mode)) {
+	/* 是一个交换分区 */
 		ret = add_swap_extent(sis, 0, sis->max, 0);
 		*span = sis->pages;
 		return ret;
 	}
+
+	/* 是一个交换文件 */
 
 	if (mapping->a_ops->swap_activate) {
 		ret = mapping->a_ops->swap_activate(sis, swap_file, span);
@@ -2872,6 +2892,10 @@ static int claim_swapfile(struct swap_info_struct *p, struct inode *inode)
 			return error;
 		}
 		p->old_block_size = block_size(p->bdev);
+		/*
+		 * If the swap area is a partition, the block size will be configured
+		 * to the PAGE_SIZE
+		 */
 		error = set_blocksize(p->bdev, PAGE_SIZE);
 		if (error < 0)
 			return error;
@@ -3442,6 +3466,7 @@ void swap_shmem_alloc(swp_entry_t entry)
  * if __swap_duplicate() fails for another reason (-EINVAL or -ENOENT), which
  * might occur if a page table entry has got corrupted.
  */
+/* verifies a swap entry is valid and, if so, increments its swap_map count */
 int swap_duplicate(swp_entry_t entry)
 {
 	int err = 0;

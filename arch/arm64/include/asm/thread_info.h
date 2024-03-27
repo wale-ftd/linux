@@ -81,9 +81,21 @@ void arch_release_task_struct(struct task_struct *tsk);
  *  TIF_NOTIFY_RESUME	- callback before returning to user
  *  TIF_USEDFPU		- FPU was used by this task this quantum (SMP)
  */
+/* 表示在 thread_info.flags 的第几位 */
 #define TIF_SIGPENDING		0
+/*
+ * 时钟中断处理程序检查当前进程的执行时间有没有超过限额，如果超过限额，设置
+ * 需要重新调度的标志。当时钟中断处理程序准备把处理器还给被打断的进程时，如
+ * 果被打断的进程在用户模式下运行，就检查有没有设置需要重新调度的标志，如果
+ * 设置了，调用 schedule()函数以调度进程。
+ * 周期调度的函数是 scheduler_tick()，它调用当前进程所属调度类的 task_tick
+ * 方法。如果需要重新调度， 就为当前进程的 thread_info 结构体的成员 flags
+ * 设置需要重新调度的标志位，中断处理程序在返回的时候会检查这个标志位，见
+ * do_notify_resume 。
+ */
 #define TIF_NEED_RESCHED	1
 #define TIF_NOTIFY_RESUME	2	/* callback before returning to user */
+/* 处理器的浮点状态不是当前进程 */
 #define TIF_FOREIGN_FPSTATE	3	/* CPU's FP state is not current's */
 #define TIF_UPROBE		4	/* uprobe breakpoint or singlestep */
 #define TIF_FSCHECK		5	/* Check FS is USER_DS on return */
@@ -96,6 +108,7 @@ void arch_release_task_struct(struct task_struct *tsk);
 #define TIF_FREEZE		19
 #define TIF_RESTORE_SIGMASK	20
 #define TIF_SINGLESTEP		21
+/* 判断用户空间程序是不是 32 位 */
 #define TIF_32BIT		22	/* 32bit process */
 #define TIF_SVE			23	/* Scalable Vector Extension in use */
 #define TIF_SVE_VL_INHERIT	24	/* Inherit sve_vl_onexec across exec */

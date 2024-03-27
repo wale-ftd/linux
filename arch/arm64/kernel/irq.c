@@ -57,6 +57,7 @@ static void init_irq_stacks(void)
 /* irq stack only needs to be 16 byte aligned - not IRQ_STACK_SIZE aligned. */
 DEFINE_PER_CPU_ALIGNED(unsigned long [IRQ_STACK_SIZE/sizeof(long)], irq_stack);
 
+/* 是这个 */
 static void init_irq_stacks(void)
 {
 	int cpu;
@@ -69,6 +70,10 @@ static void init_irq_stacks(void)
 void __init init_IRQ(void)
 {
 	init_irq_stacks();
+	/*
+	 * 不同的 SoC 的芯片设计都不一样，采用的中断控制器及其连接方式也不同，
+	 * 有的采用 GIC-V2 ，有的用 GIC-V3 ，也有的厂商采用自己设计的中断控制器
+	 */
 	irqchip_init();
 	if (!handle_arch_irq)
 		panic("No interrupt controller found.");

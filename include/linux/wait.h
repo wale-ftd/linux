@@ -1124,6 +1124,7 @@ int autoremove_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, i
 
 #define DEFINE_WAIT(name) DEFINE_WAIT_FUNC(name, autoremove_wake_function)
 
+/* 初始化完后， func 还可以自定义，见 wait_on_page_bit_common() */
 #define init_wait(wait)								\
 	do {									\
 		(wait)->private = current;					\

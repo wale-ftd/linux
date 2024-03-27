@@ -26,7 +26,17 @@
  * the anon_vma object itself: we're guaranteed no page can be
  * pointing to this anon_vma once its vma list is empty.
  */
+ /*
+  * 用于查找映射到指定物理页面 page 的所有 VMA 。
+  * page.mapping 和 vm_area_struct.anon_vma 指向这个结构体。
+  */
 struct anon_vma {
+    /*
+     * av_1, av_11, av_111 分别是父进程、子进程、子孙进程。
+     * av_1.root   = av_1
+     * av_11.root  = av_1.root
+     * av_111.root = av_1.root
+     */
 	struct anon_vma *root;		/* Root of this anon_vma tree */
 	struct rw_semaphore rwsem;	/* W: modification, R: walking the list */
 	/*
@@ -58,6 +68,7 @@ struct anon_vma {
 	 */
 
 	/* Interval tree of private "related" vmas */
+    /* 存放 anon_vma_chain 数据结构 */
 	struct rb_root_cached rb_root;
 };
 
@@ -74,10 +85,19 @@ struct anon_vma {
  * The "rb" field indexes on an interval tree the anon_vma_chains
  * which link all the VMAs associated with this anon_vma.
  */
+/*
+ * 有两个作用：
+ *   1. 连接同一进程的 vma 和 av ；
+ *   2. 连接父子进程间的关系(vma_c 和 av_p)
+ */
 struct anon_vma_chain {
+    /* 1. 指向 vma ，2. 指向 vma_c */
 	struct vm_area_struct *vma;
+    /* 1. 指向 av ，2. 指向 av_p */
 	struct anon_vma *anon_vma;
+    /* 1. 添加到 vma->anon_vma_chain 中；2. 添加到 vma_c->anon_vma_chain 中 */
 	struct list_head same_vma;   /* locked by mmap_sem & page_table_lock */
+    /* 1. 添加到 av->rb_root 中；2. 添加到 av_p->rb_root 中 */
 	struct rb_node rb;			/* locked by anon_vma->rwsem */
 	unsigned long rb_subtree_last;
 #ifdef CONFIG_DEBUG_VM_RB
@@ -148,6 +168,7 @@ int anon_vma_fork(struct vm_area_struct *, struct vm_area_struct *);
 static inline int anon_vma_prepare(struct vm_area_struct *vma)
 {
 	if (likely(vma->anon_vma))
+		/* 已经初始化了 RMAP */
 		return 0;
 
 	return __anon_vma_prepare(vma);
@@ -265,10 +286,14 @@ struct rmap_walk_control {
 	 * Return false if page table scanning in rmap_walk should be stopped.
 	 * Otherwise, return true.
 	 */
+	/* 表示具体断开某个 VMA 上映射的 PTE */
 	bool (*rmap_one)(struct page *page, struct vm_area_struct *vma,
 					unsigned long addr, void *arg);
+    /* 表示断开一个页面是否断开成功 */
 	int (*done)(struct page *page);
+    /* 实现一个锁机制 */
 	struct anon_vma *(*anon_lock)(struct page *page);
+    /* 表示跳过无效的 VMA */
 	bool (*invalid_vma)(struct vm_area_struct *vma, void *arg);
 };
 

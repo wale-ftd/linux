@@ -183,6 +183,7 @@ static int __die(const char *str, int err, struct pt_regs *regs)
 
 	if (!user_mode(regs)) {
 		dump_backtrace(regs, tsk);
+        /* 把当前 PC 寄存器指向的地址 addr 输出，并且输出 addr 的前 4 条指令 */
 		dump_instr(KERN_EMERG, regs);
 	}
 

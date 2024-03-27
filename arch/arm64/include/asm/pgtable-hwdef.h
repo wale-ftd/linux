@@ -49,14 +49,17 @@
  * Rearranging it a bit we get :
  *   (4 - n) * (PAGE_SHIFT - 3) + 3
  */
+/* == 21 */
 #define ARM64_HW_PGTABLE_LEVEL_SHIFT(n)	((PAGE_SHIFT - 3) * (4 - (n)) + 3)
 
+/* == 512 */
 #define PTRS_PER_PTE		(1 << (PAGE_SHIFT - 3))
 
 /*
  * PMD_SHIFT determines the size a level 2 page table entry can map.
  */
 #if CONFIG_PGTABLE_LEVELS > 2
+/* PMD_SHIFT = 21 */
 #define PMD_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(2)
 #define PMD_SIZE		(_AC(1, UL) << PMD_SHIFT)
 #define PMD_MASK		(~(PMD_SIZE-1))
@@ -67,6 +70,7 @@
  * PUD_SHIFT determines the size a level 1 page table entry can map.
  */
 #if CONFIG_PGTABLE_LEVELS > 3
+/* PUD_SHIFT = 30 */
 #define PUD_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(1)
 #define PUD_SIZE		(_AC(1, UL) << PUD_SHIFT)
 #define PUD_MASK		(~(PUD_SIZE-1))
@@ -77,9 +81,11 @@
  * PGDIR_SHIFT determines the size a top-level page table entry can map
  * (depending on the configuration, this level can be 0, 1 or 2).
  */
+/* CONFIG_PGTABLE_LEVELS=4 ，所以 PGDIR_SHIFT = 39 */
 #define PGDIR_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(4 - CONFIG_PGTABLE_LEVELS)
 #define PGDIR_SIZE		(_AC(1, UL) << PGDIR_SHIFT)
 #define PGDIR_MASK		(~(PGDIR_SIZE-1))
+/* 1 << 9 = 512 */
 #define PTRS_PER_PGD		(1 << (MAX_USER_VA_BITS - PGDIR_SHIFT))
 
 /*
@@ -99,6 +105,7 @@
 #define CONT_PTE_SHIFT		7
 #define CONT_PMD_SHIFT		5
 #else
+/* 是这里 */
 #define CONT_PTE_SHIFT		4
 #define CONT_PMD_SHIFT		4
 #endif
@@ -112,10 +119,18 @@
 /* the the numerical offset of the PTE within a range of CONT_PTES */
 #define CONT_RANGE_OFFSET(addr) (((addr)>>PAGE_SHIFT)&(CONT_PTES-1))
 
+/* Level 0 指 PGD */
+
 /*
  * Hardware page table definitions.
  *
  * Level 1 descriptor (PUD).
+ */
+/*
+ * PUD 页表项的 bit[1:0] 。
+ * bit[0] 页表项是否有效
+ * bit[1] 。当该位为 0 时，说明这是一个段映射，即巨页的 PUD 页表项；当该位为 1 时，
+ * 说明它指向下一级页表(即 PT)。
  */
 #define PUD_TYPE_TABLE		(_AT(pudval_t, 3) << 0)
 #define PUD_TABLE_BIT		(_AT(pudval_t, 1) << 1)
@@ -124,6 +139,12 @@
 
 /*
  * Level 2 descriptor (PMD).
+ */
+/*
+ * PMD 页表项的 bit[1:0] 。
+ * bit[0] 页表项是否有效
+ * bit[1] 。当该位为 0 时，说明这是一个段映射，即巨页的 PMD 页表项；当该位为 1 时，
+ * 说明它指向下一级页表(即 PT)。
  */
 #define PMD_TYPE_MASK		(_AT(pmdval_t, 3) << 0)
 #define PMD_TYPE_FAULT		(_AT(pmdval_t, 0) << 0)
@@ -147,6 +168,7 @@
 /*
  * AttrIndx[2:0] encoding (mapping attributes defined in the MAIR* registers).
  */
+/* 用法见 MT_NORMAL */
 #define PMD_ATTRINDX(t)		(_AT(pmdval_t, (t)) << 2)
 #define PMD_ATTRINDX_MASK	(_AT(pmdval_t, 7) << 2)
 
@@ -154,31 +176,66 @@
  * Level 3 descriptor (PTE).
  */
 #define PTE_TYPE_MASK		(_AT(pteval_t, 3) << 0)
+/* 无效页表项 */
 #define PTE_TYPE_FAULT		(_AT(pteval_t, 0) << 0)
 #define PTE_TYPE_PAGE		(_AT(pteval_t, 3) << 0)
+/* 页表类型的页表项 */
 #define PTE_TABLE_BIT		(_AT(pteval_t, 1) << 1)
+/*
+ * 允许通过用户权限访问该内存。
+ * 1: 可以通过 EL0(用户权限)以及更高权限的异常等级访问该内存
+ * 0: 不能通过 EL0 访问，但可以通过 EL1 访问
+ */
 #define PTE_USER		(_AT(pteval_t, 1) << 6)		/* AP[1] */
+/* 1: 只读； 0: 可读可写 */
 #define PTE_RDONLY		(_AT(pteval_t, 1) << 7)		/* AP[2] */
+/* 内存共享属性。 00: 没有共享； 01: 保留； 10: 外部可共享； 11: 内部可共享 */
 #define PTE_SHARED		(_AT(pteval_t, 3) << 8)		/* SH[1:0], inner shareable */
+/*
+ * 当 AF 为 0 时，当第一次访问页面所在的地址范围时，硬件会根据是否使能了硬件管理
+ * 访问位(TCR_EL1 里的 HA 字段是否为 1 ，ARMv8.1引入)做处理：
+ *   1. 若使能，硬件会自动设置 AF 访问位。
+ *   2. 若未使能，硬件会产生一个访问位的 page fault 来通知软件，然后软件就可以设
+ *      置访问标志位为 1 。
+ * 当 AF 为 1 时，表示该页面已经被访问过。
+ */
 #define PTE_AF			(_AT(pteval_t, 1) << 10)	/* Access Flag */
+/*
+ * 用于 TLB 管理。TLB 的页表项分成全局的和进程特有的。当设置该位时表示这个页面对应
+ * 的 TLB 页表项是进程特有的
+ */
 #define PTE_NG			(_AT(pteval_t, 1) << 11)	/* nG */
+/*
+ * 表示页面被修改过。要使能了 TCR_EL1 里的 HD 字段(即使能了硬件管理脏位(ARMv8.1引
+ * 入))才有意义，否则被 PTE_WRITE 复用。
+ * 当使能了 TCR_EL1 里的 HD 字段(即使能了硬件管理脏位(ARMv8.1引入))时，当处理器写
+ * 一个只读的内存地址时，硬件会检查 DBM 字段，若该字段为 1 ，那么处理器会自动修改
+ * AP[2]位为 0 ，使该页面具有可写权限。
+ */
 #define PTE_DBM			(_AT(pteval_t, 1) << 51)	/* Dirty Bit Management */
+/* 表示当前页表项处在一个连续物理页面集合中，可使用单个 TLB 页表项进行优化 */
 #define PTE_CONT		(_AT(pteval_t, 1) << 52)	/* Contiguous range */
+/* 该内存不能在特权模式下执行 */
 #define PTE_PXN			(_AT(pteval_t, 1) << 53)	/* Privileged XN */
+/* 该内存不能在用户模式下执行。如内核里的映射要设置这位 */
 #define PTE_UXN			(_AT(pteval_t, 1) << 54)	/* User XN */
 #define PTE_HYP_XN		(_AT(pteval_t, 1) << 54)	/* HYP XN */
+/* [58:55] 是预留位，软件可以利用这些位来实现某些特殊功能 */
 
+/* (((1<<36) - 1) << 12) = [47:12]为 1 = 0x0000fffffffff000 */
 #define PTE_ADDR_LOW		(((_AT(pteval_t, 1) << (48 - PAGE_SHIFT)) - 1) << PAGE_SHIFT)
 #ifdef CONFIG_ARM64_PA_BITS_52
 #define PTE_ADDR_HIGH		(_AT(pteval_t, 0xf) << 12)
 #define PTE_ADDR_MASK		(PTE_ADDR_LOW | PTE_ADDR_HIGH)
 #else
+/* 是这个。为 0x0000fffffffff000 */
 #define PTE_ADDR_MASK		PTE_ADDR_LOW
 #endif
 
 /*
  * AttrIndx[2:0] encoding (mapping attributes defined in the MAIR* registers).
  */
+/* 用法见 MT_NORMAL */
 #define PTE_ATTRINDX(t)		(_AT(pteval_t, (t)) << 2)
 #define PTE_ATTRINDX_MASK	(_AT(pteval_t, 7) << 2)
 
@@ -212,6 +269,7 @@
 /*
  * Highest possible physical address supported.
  */
+/* == 48 */
 #define PHYS_MASK_SHIFT		(CONFIG_ARM64_PA_BITS)
 #define PHYS_MASK		((UL(1) << PHYS_MASK_SHIFT) - 1)
 

@@ -20,6 +20,7 @@
 #include <asm/qspinlock.h>
 
 /* See include/linux/spinlock.h */
+/* include/linux/spinlock.h 有详细的注释 */
 #define smp_mb__after_spinlock()	smp_mb()
 
 #endif /* __ASM_SPINLOCK_H */
