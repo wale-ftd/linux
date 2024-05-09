@@ -2623,6 +2623,7 @@ static enum compact_result compact_zone_order(struct zone *zone, int order,
 	enum compact_result ret;
 	struct compact_control cc = {
 		.order = order,
+		/* 迁移页扫描器和空闲页扫描器，使用快速扫描能力 */
 		.search_order = order,
 		.gfp_mask = gfp_mask,
 		.zone = zone,
