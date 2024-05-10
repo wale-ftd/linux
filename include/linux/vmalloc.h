@@ -31,6 +31,7 @@ struct notifier_block;		/* in notifier.h */
 #define IOREMAP_MAX_ORDER	(7 + PAGE_SHIFT)	/* 128 pages */
 #endif
 
+/* 不连续页分配器的数据结构 */
 struct vm_struct {
 	/* 指向下一个 vm_struct 实例 */
 	struct vm_struct	*next;

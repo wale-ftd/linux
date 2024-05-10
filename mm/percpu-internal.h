@@ -38,6 +38,7 @@ struct pcpu_chunk {
 	unsigned long		*bound_map;	/* boundary map */
 	struct pcpu_block_md	*md_blocks;	/* metadata blocks */
 
+	/* 指向 vm_struct 指针数组，每个元素对应一个 vm_struct 实例 */
 	void			*data;		/* chunk data */
 	int			first_bit;	/* no free below this */
 	bool			immutable;	/* no [de]population allowed */

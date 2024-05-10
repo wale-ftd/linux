@@ -21,7 +21,32 @@
  *                       vmalloc 函数分配不连续的物理页。
  *
  * 每个虚拟内存区域对应一个 vmap_area 实例。每个 vmap_area 实例关联一个
- * vm_struct 实例
+ * vm_struct 实例。
+ *
+ * vmap_area_root 根据虚拟地址快速找到 vmap_area 实例
+ * vmap_area_list 按虚拟地址从小到大排序
+ *
+ * vmalloc 虚拟地址空间的范围是[VMALLOC_START, VMALLOC_END)， 每种处理器架构都需
+ * 要定义这两个宏
+ *
+ * 函数 vmalloc 分配的单位是页，如果请求分配的长度不是页的整数倍，那么把长度向上
+ * 对齐到页的整数倍。建议在需要申请的内存长度超过一页的时候使用函数 vmalloc 。
+ *
+ * 函数 vmalloc 的执行过程分为 3 步。
+ *   1.分配虚拟内存区域。分配 vm_struct 实例和 vmap_area 实例；然后遍历已经存在
+ *     的 vmap_area 实例，在两个相邻的虚拟内存区域之间找到一个足够大的空洞，如果
+ *     找到了，把起始虚拟地址和结束虚拟地址保存在新的 vmap_area 实例中，然后把新
+ *     的 vmap_area 实例加入红黑树和链表；最后把新的 vmap_area 实例关联到
+ *     vm_struct 实例。
+ *   2.分配物理页。 vm_struct 实例的成员 nr_pages 存放页数 n ；分配 page 指针数
+ *     组，数组的大小是 n ， vm_struct 实例的成员 pages 指向 page 指针数组；然后
+ *     连续执行 n 次如下操作：从页分配器分配一个物理页，把物理页对应的 page 实例
+ *     的地址存放在 page 指针数组中。
+ *   3.在内核的页表中把虚拟页映射到物理页。内核的页表就是 0 号内核线程的页表。 0
+ *     号内核线程的进程描述符是全局变量 init_task ，成员 active_mm 指向全局变量
+ *     init_mm ， init_mm 的成员 pgd 指向页全局目录 swapper_pg_dir 。
+ *
+ * 函数 vmap 和函数 vmalloc 的区别仅仅在于不需要分配物理页。
  */
 
 #include <linux/vmalloc.h>
