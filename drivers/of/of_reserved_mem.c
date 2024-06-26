@@ -177,6 +177,11 @@ static const struct of_device_id __rmem_of_table_sentinel
 /**
  * res_mem_init_node() - call region specific reserved memory init code
  */
+/*
+ * 调用注册的所有保留内存初始化函数，保留内存初始化函数是使用宏
+ * RESERVEDMEM_OF_DECLARE 定义的，放在 __reservedmem_of_table 段里面。如全局 CMA
+ * 区域的初始化函数是 rmem_cma_setup
+ */
 static int __init __reserved_mem_init_node(struct reserved_mem *rmem)
 {
 	extern const struct of_device_id __reservedmem_of_table[];

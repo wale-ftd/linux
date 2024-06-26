@@ -581,8 +581,15 @@ static inline bool system_supports_fpsimd(void)
 }
 
 /*
- * true: 硬件不支持 PAN ，使用软件模拟 PAN
- * false: 硬件支持 PAN 或 未使能软件模拟 PAN
+ * PAN(Privileged Access Never)特性用来禁止内核访问用户虚拟地址。这个功能可以处
+ * 理器支持，也可以用 ttbr0 模拟。
+ * 如果处理器不支持 PAN 特性，那么内核通过切换寄存器 TTBR0_EL1 仿真 PAN 特性：在
+ * 进程进入内核模式时，把寄存器 TTBR0_EL1 设置为保留的地址空间标识符 0 和内核的
+ * 页全局目录(swapper_pg_dir)后面的保留区域的物理地址；在进程退出内核模式时，把
+ * 寄存器 TTBR0_EL1 设置为进程的地址空间标识符和页全局目录的物理地址。
+ *
+ * true: 使能了软件模拟 PAN 并且硬件不支持 PAN
+ * false: !true
  */
 static inline bool system_uses_ttbr0_pan(void)
 {

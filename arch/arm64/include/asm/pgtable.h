@@ -75,7 +75,9 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 #define __phys_to_pte_val(phys)	(phys)
 #endif
 
+/* 从页表项取出页帧号 */
 #define pte_pfn(pte)		(__pte_to_phys(pte) >> PAGE_SHIFT)
+/* 把页帧号和标志位组合成页表项 */
 #define pfn_pte(pfn,prot)	\
 	__pte(__phys_to_pte_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
 
@@ -87,7 +89,7 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 /*
  * The following only work if pte_present(). Undefined behaviour otherwise.
  */
-/* 判断该页面是否在内存中 */
+/* 判断该页面是否在内存中，如果不在内存中，说明页被换出到交换区 */
 #define pte_present(pte)	(!!(pte_val(pte) & (PTE_VALID | PTE_PROT_NONE)))
 /* 判断该页面是否被访问过 */
 #define pte_young(pte)		(!!(pte_val(pte) & PTE_AF))
@@ -108,7 +110,7 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
 
 #define pte_hw_dirty(pte)	(pte_write(pte) && !(pte_val(pte) & PTE_RDONLY))
 #define pte_sw_dirty(pte)	(!!(pte_val(pte) & PTE_DIRTY))
-/* 判断该页面是否被写入过 */
+/* 判断该页面是不是脏的，即页的数据是不是被修改过 */
 #define pte_dirty(pte)		(pte_sw_dirty(pte) || pte_hw_dirty(pte))
 
 #define pte_valid(pte)		(!!(pte_val(pte) & PTE_VALID))
@@ -585,9 +587,11 @@ static inline phys_addr_t pud_page_paddr(pud_t pud)
 
 #define pud_ERROR(pud)		__pud_error(__FILE__, __LINE__, pud_val(pud))
 
+/* 判断页全局目录表项是否是空表项(没有指向下一级页表) */
 #define pgd_none(pgd)		(!pgd_val(pgd))
 /* pgd 不能为块类型的页表项 */
 #define pgd_bad(pgd)		(!(pgd_val(pgd) & 2))
+/* 判断页全局目录表项是否存在(即是否指向下一级页表) */
 #define pgd_present(pgd)	(pgd_val(pgd))
 
 static inline void set_pgd(pgd_t *pgdp, pgd_t pgd)
@@ -659,11 +663,11 @@ static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 
 #define pgd_offset_raw(pgd, addr)	((pgd) + pgd_index(addr))
 
-/* 在进程的 PGD 页表中，根据虚拟地址来查找对应的 PGD 页表项(pgd_t *) */
+/* 在进程的 PGD 页表中，根据虚拟地址来查找对应的 PGD 页表项的地址(pgd_t *) */
 #define pgd_offset(mm, addr)	(pgd_offset_raw((mm)->pgd, (addr)))
 
 /* to find an entry in a kernel page-table-directory */
-/* 在内核的 PGD 页表中，根据虚拟地址来查找对应的页表项(pgd_t *) */
+/* 在内核的 PGD 页表中，根据虚拟地址来查找对应的页表项的地址(pgd_t *) */
 #define pgd_offset_k(addr)	pgd_offset(&init_mm, addr)
 
 /* addr 是物理地址 */
@@ -850,6 +854,11 @@ void pgd_cache_init(void);
 
 /*
  * On AArch64, the cache coherency is handled via the set_pte_at() function.
+ */
+/*
+ * 修改页表项以后把页表项设置到页表缓存由软件管理页表缓存的处理器必须实现该函数，
+ * 例如 MIPS 处理器 ARM64 处理器的内存管理单元可以访问内存中的页表，把页表项复制
+ * 到页表缓存，所以 ARM64 架构的函数 update_mmu_cache 什么都不用做
  */
 static inline void update_mmu_cache(struct vm_area_struct *vma,
 				    unsigned long addr, pte_t *ptep)

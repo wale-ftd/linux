@@ -95,7 +95,10 @@ static void unmap_region(struct mm_struct *mm,
  *								w: (no) no
  *								x: (yes) yes
  */
-/* P 表示 private ， S 表示 shared ，后面的数字分别表示可读、可写、可执行 */
+/*
+ * P 表示 private ， S 表示 shared ，后面的数字分别表示可读、可写、可执行。
+ * private 的都是 read only 的。
+ */
 pgprot_t protection_map[16] __ro_after_init = {
 	__P000, __P001, __P010, __P011, __P100, __P101, __P110, __P111,
 	__S000, __S001, __S010, __S011, __S100, __S101, __S110, __S111
@@ -110,7 +113,7 @@ static inline pgprot_t arch_filter_pgprot(pgprot_t prot)
 
 pgprot_t vm_get_page_prot(unsigned long vm_flags)
 {
-    /* vm_flags = VM_DATA_DEFAULT_FLAGS 对应的 PTE 属性为 PAGE_READONLY */
+    /* 对于私有映射，无论 vm_flags 是否有写权限，对应的 PTE 属性均为 read only */
 	pgprot_t ret = __pgprot(pgprot_val(protection_map[vm_flags &
 				(VM_READ|VM_WRITE|VM_EXEC|VM_SHARED)]) |
 			pgprot_val(arch_vm_get_page_prot(vm_flags)));
@@ -1812,6 +1815,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	vma->vm_start = addr;
 	vma->vm_end = addr + len;
 	vma->vm_flags = vm_flags;
+	/* 对于私有映射的页面会进行降权，即可写的 vma 对应的页面都是只读的 */
 	vma->vm_page_prot = vm_get_page_prot(vm_flags);
 	vma->vm_pgoff = pgoff;
 

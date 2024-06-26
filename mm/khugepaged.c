@@ -440,6 +440,7 @@ int __khugepaged_enter(struct mm_struct *mm)
 	 * down a little.
 	 */
 	wakeup = list_empty(&khugepaged_scan.mm_head);
+	/* 加入扫描链表的内存描述符设置了标志 MMF_VM_HUGEPAGE */
 	list_add_tail(&mm_slot->mm_node, &khugepaged_scan.mm_head);
 	spin_unlock(&khugepaged_mm_lock);
 
@@ -1838,6 +1839,12 @@ static void khugepaged_wait_work(void)
 		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
+/*
+ * 定期地扫描允许使用透明巨型页的虚拟内存区域，尝试把普通页合并成巨型页。
+ *
+ * 在分配透明巨页时，会把进程的内存描述符加入透明巨型页线程的扫描链表中，如果分
+ * 配透明巨型页失败，回退使用普通页，透明巨型页线程将会尝试把普通页合并成巨型页
+ */
 static int khugepaged(void *none)
 {
 	struct mm_slot *mm_slot;

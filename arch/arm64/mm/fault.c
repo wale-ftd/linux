@@ -308,6 +308,7 @@ static void __do_kernel_fault(unsigned long addr, unsigned int esr,
 	 * Are we prepared to handle this kernel fault?
 	 * We are almost certainly not prepared to handle instruction faults.
 	 */
+	/* copy_to_user()/copy_from_user()会 fixup_exception */
 	if (!is_el1_instruction_abort(esr) && fixup_exception(regs))
 		return;
 
@@ -429,7 +430,7 @@ good_area:
 	 * Check that the permissions on the VMA allow for the fault which
 	 * occurred.
 	 */
-	/* 判断 VMA 的属性 */
+	/* 判断 VMA 属性的匹配情况 */
 	if (!(vma->vm_flags & vm_flags)) {
 	/*
 	 * 如在 do_page_fault()中通过 ESR 的 WnR 可知，这次异常是写内存导致的，
@@ -495,15 +496,18 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 
     /* 处理比较少见的特殊情况 */
 	if (is_ttbr0_addr(addr) && is_el1_permission_fault(addr, esr, regs)) {
+	/* 内核空间访问用户空间时发生了权限错误 */
 		/* regs->orig_addr_limit may be 0 if we entered from EL0 */
 		if (regs->orig_addr_limit == KERNEL_DS)
 			die_kernel_fault("access to user memory with fs=KERNEL_DS",
 					 addr, esr, regs);
 
 		if (is_el1_instruction_abort(esr))
+		/* 内核空间访问用户空间的指令时发生错误 */
 			die_kernel_fault("execution of user memory",
 					 addr, esr, regs);
 
+		/* 用户空间访问用户空间，如 copy_from_user()/copy_to_user() */
 		if (!search_exception_tables(regs->pc))
         /* 在异常表找不到合适的处理函数 */
 			die_kernel_fault("access to user memory outside uaccess routines",
@@ -533,8 +537,10 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 */
 	if (!down_read_trylock(&mm->mmap_sem)) {
 		if (!user_mode(regs) && !search_exception_tables(regs->pc))
+		/* 对应情况 2 */
 			goto no_context;
 retry:
+		/* 对应情况 1 */
 		down_read(&mm->mmap_sem);
 	} else {
 		/*
@@ -561,6 +567,7 @@ retry:
 		if (fatal_signal_pending(current)) {
 			if (!user_mode(regs))
 				goto no_context;
+			/* return 后，会在返回用户空间前处理信号 */
 			return 0;
 		}
 
@@ -712,11 +719,18 @@ static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 1 address size fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 2 address size fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 3 address size fault"	},
+	/* 0 1 2 3 对应 pgd pud pmd pt */
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 0 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 1 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 2 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 3 translation fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 8"			},
+	/*
+	 * 为什么 access 和 permission 没有 level 0 ？因为 access 和 permission 表示
+	 * 页有没有被访问过和是否有权限访问的，而 level 0 是 pgd ，并不是真正的页，
+	 * pgd 是一定要有的，但 level 1 并不一定是 pud ，可以直接指向一个 block ，比
+	 * 如大页。
+	 */
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 1 access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 2 access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 3 access flag fault"	},

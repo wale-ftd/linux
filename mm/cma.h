@@ -4,8 +4,10 @@
 
 struct cma {
 	unsigned long   base_pfn;
+	/* 该 cma 区域包含的页数 */
 	unsigned long   count;
 	unsigned long   *bitmap;
+	/* 位图中的每个位描述的物理页的阶数，如取值为 0 ，表示每个位描述一页 */
 	unsigned int order_per_bit; /* Order of pages represented by one bit */
 	struct mutex    lock;
 #ifdef CONFIG_CMA_DEBUGFS

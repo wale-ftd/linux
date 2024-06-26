@@ -5,6 +5,15 @@
 #include <linux/bits.h>
 
 #define BITS_PER_TYPE(type) (sizeof(type) * BITS_PER_BYTE)
+/*
+ * nr 个位需要多个 long 类型。
+ * nr     ret
+ * 0   ->  0
+ * 1   ->  1
+ * ...
+ * 64  ->  1
+ * 65  ->  2
+ */
 #define BITS_TO_LONGS(nr)	DIV_ROUND_UP(nr, BITS_PER_TYPE(long))
 
 extern unsigned int __sw_hweight8(unsigned int w);

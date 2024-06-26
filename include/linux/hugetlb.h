@@ -51,8 +51,10 @@ struct hugepage_subpool {
 	long max_hpages;	/* Maximum huge pages or -1 if no maximum. */
 	long used_hpages;	/* Used count against maximum, includes */
 				/* both alloced and reserved pages. */
+	/* 关联的巨型页池 */
 	struct hstate *hstate;
 	long min_hpages;	/* Minimum huge pages or -1 if no minimum. */
+	/* 子池向巨型页池申请预留的巨型页的数量 */
 	long rsv_hpages;	/* Pages reserved against global pool to */
 				/* sasitfy minimum size. */
 };
@@ -272,10 +274,17 @@ enum {
 
 #ifdef CONFIG_HUGETLBFS
 struct hugetlbfs_sb_info {
+	/* 索引节点最大数量 */
 	long	max_inodes;   /* inodes allowed */
+	/* 空闲的索引节点数量 */
 	long	free_inodes;  /* inodes free */
 	spinlock_t	stat_lock;
+	/* 关联的巨型页池 */
 	struct hstate *hstate;
+	/*
+	 * 如果指定了最大巨型页数量或最小巨型页数量，那么为巨型页池创建一个子池，成
+	 * 员 spool 指向子池
+	 */
 	struct hugepage_subpool *spool;
 	kuid_t	uid;
 	kgid_t	gid;
@@ -336,26 +345,61 @@ unsigned long hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
 
 #define HSTATE_NAME_LEN 32
 /* Defines one hugetlb page size */
+/*
+ * 巨型页池的抽象
+ *
+ * 巨型页池中的巨型页分为两种。
+ *   1.永久巨型页：永久巨型页是保留的，不能有其他用途，被预先分配到巨型页池，当
+ *     进程释放永久巨型页的时候，永久巨型页被归还到巨型页池。
+ *   2.临时巨型页：也称为多余的(surplus)巨型页，当永久巨型页用完的时候，可以从页
+ *     分配器分配临时巨型页；进程释放临时巨型页的时候，直接释放到页分配器。当设
+ *     备长时间运行后，内存可能碎片化，分配临时巨型页可能失败。
+ */
 struct hstate {
+	/*
+	 * 分配永久巨型页并添加到巨型页池中的时候，在允许的内存节点集合中轮流从每个
+	 * 内存节点分配永久巨型页，这个成员用来记录下次从哪个内存节点分配永久巨型页
+	 */
 	int next_nid_to_alloc;
+	/*
+	 * 从巨型页池释放空闲巨型页的时候，在允许的内存节点集合中轮流从每个内存节点
+	 * 释放巨型页，这个成员用来记录下次从哪个内存节点释放巨型页
+	 */
 	int next_nid_to_free;
+	/* 巨型页的长度，页的阶数 */
 	unsigned int order;
+	/* 巨型页页号的掩码，将虚拟地址和掩码按位与，得到巨型页页号 */
 	unsigned long mask;
+	/* 永久巨型页的最大数量 */
 	unsigned long max_huge_pages;
+	/* 巨型页的数量 */
 	unsigned long nr_huge_pages;
+	/* 空闲巨型页的数量 */
 	unsigned long free_huge_pages;
+	/*
+	 * 预留巨型页的数量，它们已经承诺分配但还没有分配。预留巨型页数量包含在空闲
+	 * 巨型页数量里面，进程创建内存映射的时候已经申请预留巨型页
+	 */
 	unsigned long resv_huge_pages;
+	/* 临时巨型页的数量 */
 	unsigned long surplus_huge_pages;
+	/* 临时巨型页的最大数量 */
 	unsigned long nr_overcommit_huge_pages;
+	/* 把已分配出去的巨型页链接起来 */
 	struct list_head hugepage_activelist;
+	/* 每个内存节点一个空闲巨型页链表 */
 	struct list_head hugepage_freelists[MAX_NUMNODES];
+	/* 每个内存节点中巨型页的数量 */
 	unsigned int nr_huge_pages_node[MAX_NUMNODES];
+	/* 每个内存节点中空闲巨型页的数量 */
 	unsigned int free_huge_pages_node[MAX_NUMNODES];
+	/* 每个内存节点中临时巨型页的数量 */
 	unsigned int surplus_huge_pages_node[MAX_NUMNODES];
 #ifdef CONFIG_CGROUP_HUGETLB
 	/* cgroup control files */
 	struct cftype cgroup_files[5];
 #endif
+	/* 巨型页池的名称，格式是"hugepages-<size>kB" */
 	char name[HSTATE_NAME_LEN];
 };
 
@@ -438,6 +482,7 @@ static inline unsigned huge_page_shift(struct hstate *h)
 	return h->order + PAGE_SHIFT;
 }
 
+/* page allocator 分配器不支持的 order 的 hstate 称为 gigantic */
 static inline bool hstate_is_gigantic(struct hstate *h)
 {
 	return huge_page_order(h) >= MAX_ORDER;

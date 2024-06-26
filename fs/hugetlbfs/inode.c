@@ -133,6 +133,7 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	 * way when do_mmap_pgoff unwinds (may be important on powerpc
 	 * and ia64).
 	 */
+	/* 设置标准巨型页标志 VM_HUGETLB 和不允许扩展标志 VM_DONTEXPAND */
 	vma->vm_flags |= VM_HUGETLB | VM_DONTEXPAND;
 	vma->vm_ops = &hugetlb_vm_ops;
 
@@ -148,6 +149,7 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 
 	/* must be huge page aligned */
+	/* 检查文件的偏移是不是巨型页长度的整数倍 */
 	if (vma->vm_pgoff & (~huge_page_mask(h) >> PAGE_SHIFT))
 		return -EINVAL;
 
@@ -161,6 +163,7 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	file_accessed(file);
 
 	ret = -ENOMEM;
+	/* 向巨型页池申请预留巨型页 */
 	if (hugetlb_reserve_pages(inode,
 				vma->vm_pgoff >> huge_page_order(h),
 				len >> huge_page_shift(h), vma,
@@ -1252,6 +1255,7 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 	sbinfo = kmalloc(sizeof(struct hugetlbfs_sb_info), GFP_KERNEL);
 	if (!sbinfo)
 		return -ENOMEM;
+	/* 指向 hugetblfs 文件系统的私有信息 */
 	sb->s_fs_info = sbinfo;
 	sbinfo->hstate = config.hstate;
 	spin_lock_init(&sbinfo->stat_lock);
@@ -1275,6 +1279,7 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 			goto out_free;
 	}
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
+	/* 块长度设置为巨型页的长度 */
 	sb->s_blocksize = huge_page_size(config.hstate);
 	sb->s_blocksize_bits = huge_page_shift(config.hstate);
 	sb->s_magic = HUGETLBFS_MAGIC;
@@ -1290,6 +1295,7 @@ out_free:
 	return -ENOMEM;
 }
 
+/* 创建超级块和根目录，把文件系统和巨型页池关联起来 */
 static struct dentry *hugetlbfs_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {

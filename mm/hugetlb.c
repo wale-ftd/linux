@@ -38,8 +38,11 @@
 #include <linux/page_owner.h>
 #include "internal.h"
 
+/* 巨型页池的数量 */
 int hugetlb_max_hstate __read_mostly;
+/* 默认巨型页池在巨型页池数组的索引 */
 unsigned int default_hstate_idx;
+/* 巨型页池数组 */
 struct hstate hstates[HUGE_MAX_HSTATE];
 /*
  * Minimum page order among possible hugepage sizes, set to a proper value
@@ -659,7 +662,12 @@ __weak unsigned long vma_mmu_pagesize(struct vm_area_struct *vma)
  * bits of the reservation map pointer, which are always clear due to
  * alignment.
  */
+/* 指明当前进程是预留的拥有者 */
 #define HPAGE_RESV_OWNER    (1UL << 0)
+/*
+ * 对于私有映射，如果创建映射的进程在执行写时复制时分配巨型页失败，那么删除所有
+ * 子进程的映射，设置该标志，让子进程在发生页错误异常时被杀死
+ */
 #define HPAGE_RESV_UNMAPPED (1UL << 1)
 #define HPAGE_RESV_MASK (HPAGE_RESV_OWNER | HPAGE_RESV_UNMAPPED)
 
@@ -2005,6 +2013,7 @@ struct page *alloc_huge_page(struct vm_area_struct *vma,
 	 * has a reservation for the page to be allocated.  A return
 	 * code of zero indicates a reservation exists (no change).
 	 */
+	/* 检查预留图，确定进程是否预留过要分配的巨型页 */
 	map_chg = gbl_chg = vma_needs_reservation(h, vma, addr);
 	if (map_chg < 0)
 		return ERR_PTR(-ENOMEM);
@@ -2016,6 +2025,7 @@ struct page *alloc_huge_page(struct vm_area_struct *vma,
 	 * Allocations for MAP_NORESERVE mappings also need to be
 	 * checked against any subpool limit.
 	 */
+	/* 如果进程没有预留巨型页，检查分配是否超过子池的限制 */
 	if (map_chg || avoid_reserve) {
 		gbl_chg = hugepage_subpool_get_pages(spool, 1);
 		if (gbl_chg < 0) {
@@ -2045,9 +2055,11 @@ struct page *alloc_huge_page(struct vm_area_struct *vma,
 	 * from the global free pool (global change).  gbl_chg == 0 indicates
 	 * a reservation exists for the allocation.
 	 */
+	/* 从巨型页池中目标内存节点的空闲链表中分配永久巨型页 */
 	page = dequeue_huge_page_vma(h, vma, addr, avoid_reserve, gbl_chg);
 	if (!page) {
 		spin_unlock(&hugetlb_lock);
+		/* 如果分配永久巨型页失败，那么尝试从页分配器分配临时巨型页 */
 		page = alloc_buddy_huge_page_with_mpol(h, vma, addr);
 		if (!page)
 			goto out_uncharge_cgroup;
@@ -2098,6 +2110,7 @@ int __alloc_bootmem_huge_page(struct hstate *h)
 	struct huge_bootmem_page *m;
 	int nr_nodes, node;
 
+	/* 从内存节点分配巨型页 */
 	for_each_node_mask_to_alloc(h, nr_nodes, node, &node_states[N_MEMORY]) {
 		void *addr;
 
@@ -2119,6 +2132,11 @@ int __alloc_bootmem_huge_page(struct hstate *h)
 found:
 	BUG_ON(!IS_ALIGNED(virt_to_phys(m), huge_page_size(h)));
 	/* Put them into a private list first because mem_map is not up yet */
+	/*
+	 * 先把它们放到私有链表中，因为 mem_map 还没准备好。在巨型页子系统初始化时，
+	 * 把链表 huge_boot_pages 中的巨型页添加到对应的巨型页池中(hugetlb_init() ->
+	 * gather_bootmem_prealloc())
+	 */
 	INIT_LIST_HEAD(&m->list);
 	list_add(&m->list, &huge_boot_pages);
 	m->hstate = h;
@@ -2144,8 +2162,10 @@ static void __init gather_bootmem_prealloc(void)
 		struct hstate *h = m->hstate;
 
 		WARN_ON(page_count(page) != 1);
+		/* 把巨型页组织成复合页 */
 		prep_compound_huge_page(page, h->order);
 		WARN_ON(PageReserved(page));
+		/* 把巨型页添加到对应的巨型页池中 */
 		prep_new_huge_page(h, page, page_to_nid(page));
 		put_page(page); /* free it into the hugepage allocator */
 
@@ -2161,12 +2181,19 @@ static void __init gather_bootmem_prealloc(void)
 	}
 }
 
+/* 负责预先分配指定数量的永久巨型页 */
 static void __init hugetlb_hstate_alloc_pages(struct hstate *h)
 {
 	unsigned long i;
 
 	for (i = 0; i < h->max_huge_pages; ++i) {
+		/*
+		 * 如果巨型页长度超过页分配器支持的最大阶数，那么从引导内存分配器分配巨
+		 * 型页。如果巨型页长度小于或等于页分配器支持的最大阶数，那么从页分配器
+		 * 分配巨型页。
+		 */
 		if (hstate_is_gigantic(h)) {
+			/* == __alloc_bootmem_huge_page() */
 			if (!alloc_bootmem_huge_page(h))
 				break;
 		} else if (!alloc_pool_huge_page(h,
@@ -2193,6 +2220,11 @@ static void __init hugetlb_init_hstates(void)
 			minimum_order = huge_page_order(h);
 
 		/* oversize hugepages were init'ed in early boot */
+		/*
+		 * 针对每个巨型页池，如果巨型页长度小于或等于页分配器支持的最大阶数，那
+		 * 么从页分配器分配永久巨型页，添加到巨型页池中。长度超过页分配器支持的
+		 * 最大阶数的巨型页已经从引导内存分配器中分配(见 hugetlb_nrpages_setup())
+		 */
 		if (!hstate_is_gigantic(h))
 			hugetlb_hstate_alloc_pages(h);
 	}
@@ -2276,6 +2308,7 @@ found:
 }
 
 #define persistent_huge_pages(h) (h->nr_huge_pages - h->surplus_huge_pages)
+/* @count: 指定永久巨型页的最大数量 */
 static unsigned long set_max_huge_pages(struct hstate *h, unsigned long count,
 						nodemask_t *nodes_allowed)
 {
@@ -2296,12 +2329,14 @@ static unsigned long set_max_huge_pages(struct hstate *h, unsigned long count,
 	 * within all the constraints specified by the sysctls.
 	 */
 	spin_lock(&hugetlb_lock);
+	/* 如果有临时巨型页且是增加永久巨型页的数量，那么把临时巨型页转换为永久巨型页 */
 	while (h->surplus_huge_pages && count > persistent_huge_pages(h)) {
 		if (!adjust_pool_surplus(h, nodes_allowed, -1))
 			break;
 	}
 
 	while (count > persistent_huge_pages(h)) {
+		/* 如果永久巨型页的数量不够，那么分配巨型页 */
 		/*
 		 * If this allocation races such that we no longer need the
 		 * page, free_huge_page will handle it by freeing the page
@@ -2322,6 +2357,8 @@ static unsigned long set_max_huge_pages(struct hstate *h, unsigned long count,
 			goto out;
 	}
 
+	/* 处理减小永久巨型页的数量 */
+
 	/*
 	 * Decrease the pool size
 	 * First return free pages to the buddy allocator (being careful
@@ -2337,14 +2374,25 @@ static unsigned long set_max_huge_pages(struct hstate *h, unsigned long count,
 	 * and won't grow the pool anywhere else. Not until one of the
 	 * sysctls are changed, or the surplus pages go out of use.
 	 */
+	/* min_count 表示要使用的数量，等于(总数-(free-resv)) */
 	min_count = h->resv_huge_pages + h->nr_huge_pages - h->free_huge_pages;
+	/* min_count 不能小于 count */
 	min_count = max(count, min_count);
+	/*
+	 * 如果支持高端内存区域，优先把从低端内存区域分配的没有预留的空闲巨型页归还
+	 * 给页分配器
+	 */
 	try_to_free_low(h, min_count, nodes_allowed);
+	/*
+	 * 如果永久巨型页的数量超过 min_count ，那么把没有预留的空闲巨型页归还给页分
+	 * 配器
+	 */
 	while (min_count < persistent_huge_pages(h)) {
 		if (!free_pool_huge_page(h, nodes_allowed, 0))
 			break;
 		cond_resched_lock(&hugetlb_lock);
 	}
+	/* 如果永久巨型页的数量超过指定的最大数量，那么把永久巨型页转换为临时巨型页 */
 	while (count < persistent_huge_pages(h)) {
 		if (!adjust_pool_surplus(h, nodes_allowed, 1))
 			break;
@@ -2861,6 +2909,7 @@ static int __init hugetlb_nrpages_setup(char *s)
 		return 1;
 	}
 
+	/* 解析并保存内核参数"hugepagesz="的值 */
 	if (sscanf(s, "%lu", mhp) <= 0)
 		*mhp = 0;
 
@@ -2868,6 +2917,11 @@ static int __init hugetlb_nrpages_setup(char *s)
 	 * Global state is always initialized later in hugetlb_init.
 	 * But we need to allocate >= MAX_ORDER hstates here early to still
 	 * use the bootmem allocator.
+	 */
+	/*
+	 * 巨型页长度超过页分配器支持的最大阶数，那么需要从引导内存分配器分配巨型页。
+	 * 如果巨型页长度小于或等于页分配器支持的最大阶数，巨型页子系统在初始化的时
+	 * 候(hugetlb_init())从页分配器分配巨型页。
 	 */
 	if (hugetlb_max_hstate && parsed_hstate->order >= MAX_ORDER)
 		hugetlb_hstate_alloc_pages(parsed_hstate);
@@ -3555,6 +3609,10 @@ static vm_fault_t hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
 retry_avoidcopy:
 	/* If no-one else is actually using this page, avoid the copy
 	 * and just make the page writable */
+	/*
+	 * 如果只有一个虚拟页映射到该物理页，并且是匿名映射，那么不需要复制，直接修
+	 * 改页表项设置可写
+	 */
 	if (page_mapcount(old_page) == 1 && PageAnon(old_page)) {
 		page_move_anon_rmap(old_page, vma);
 		set_huge_ptep_writable(vma, haddr, ptep);
@@ -3581,6 +3639,7 @@ retry_avoidcopy:
 	 * be acquired again before returning to the caller, as expected.
 	 */
 	spin_unlock(ptl);
+	/* 分配巨型页 */
 	new_page = alloc_huge_page(vma, haddr, outside_reserve);
 
 	if (IS_ERR(new_page)) {
@@ -3594,6 +3653,13 @@ retry_avoidcopy:
 		if (outside_reserve) {
 			put_page(old_page);
 			BUG_ON(huge_pte_none(pte));
+			/*
+			 * 如果触发页错误异常的进程是创建私有映射的进程，那么删除所有子进程
+			 * 的映射，为子进程的虚拟内存区域的成员 vm_private_data 设置标志
+			 * HPAGE_RESV_UNMAPPED，让子进程在发生页错误异常的时候被杀死。
+			 *
+			 * 如果触发页错误异常的进程不是创建私有映射的进程，返回错误
+			 */
 			unmap_ref_private(mm, vma, old_page, haddr);
 			BUG_ON(huge_pte_none(pte));
 			spin_lock(ptl);
@@ -3621,6 +3687,7 @@ retry_avoidcopy:
 		goto out_release_all;
 	}
 
+	/* 把旧页的数据复制到新页 */
 	copy_user_huge_page(new_page, old_page, address, vma,
 			    pages_per_huge_page(h));
 	__SetPageUptodate(new_page);
@@ -3640,6 +3707,7 @@ retry_avoidcopy:
 		/* Break COW */
 		huge_ptep_clear_flush(vma, haddr, ptep);
 		mmu_notifier_invalidate_range(mm, range.start, range.end);
+		/* 修改页表项，映射到新页，并且设置可写 */
 		set_huge_pte_at(mm, haddr, ptep,
 				make_huge_pte(vma, new_page, 1));
 		page_remove_rmap(old_page, true);
@@ -3716,6 +3784,7 @@ int huge_add_to_page_cache(struct page *page, struct address_space *mapping,
 	return 0;
 }
 
+/* 分配并且映射到巨型页 */
 static vm_fault_t hugetlb_no_page(struct mm_struct *mm,
 			struct vm_area_struct *vma,
 			struct address_space *mapping, pgoff_t idx,
@@ -3747,8 +3816,10 @@ static vm_fault_t hugetlb_no_page(struct mm_struct *mm,
 	 * before we get page_table_lock.
 	 */
 retry:
+	/* 在文件的页缓存中根据文件的页偏移查找页 */
 	page = find_lock_page(mapping, idx);
 	if (!page) {
+	/* 在页缓存中没有找到页 */
 		size = i_size_read(mapping->host) >> huge_page_shift(h);
 		if (idx >= size)
 			goto out;
@@ -3784,6 +3855,7 @@ retry:
 			goto out;
 		}
 
+		/* 分配巨型页 */
 		page = alloc_huge_page(vma, haddr, 0);
 		if (IS_ERR(page)) {
 			ret = vmf_error(PTR_ERR(page));
@@ -3794,6 +3866,7 @@ retry:
 		new_page = true;
 
 		if (vma->vm_flags & VM_MAYSHARE) {
+		/* 是共享映射，那么把巨型页加入文件的页缓存，以便和其他进程共享页 */
 			int err = huge_add_to_page_cache(page, mapping, idx);
 			if (err) {
 				put_page(page);
@@ -3853,10 +3926,18 @@ retry:
 		page_dup_rmap(page, true);
 	new_pte = make_huge_pte(vma, page, ((vma->vm_flags & VM_WRITE)
 				&& (vma->vm_flags & VM_SHARED)));
+	/* 设置页表项 */
 	set_huge_pte_at(mm, haddr, ptep, new_pte);
 
 	hugetlb_count_add(pages_per_huge_page(h), mm);
 	if ((flags & FAULT_FLAG_WRITE) && !(vma->vm_flags & VM_SHARED)) {
+	/*
+	 * 执行写操作，并且映射是私有的，那么执行写时复制
+	 *
+	 * 假设进程 1 创建了私有的巨型页映射，然后进程 1 分叉生成进程 2 和进程 3。其
+	 * 中一个进程试图写巨型页的时候，触发页错误异常，巨型页的页错误处理函数
+	 * hugetlb_fault 调用函数 hugetlb_cow 以执行写时复制
+	 */
 		/* Optimization, do the COW without a second fault */
 		ret = hugetlb_cow(mm, vma, address, ptep, page, ptl);
 	}
@@ -3962,6 +4043,8 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	entry = huge_ptep_get(ptep);
 	if (huge_pte_none(entry)) {
+	/* 页表项是空表项 */
+		/* 分配并且映射到巨型页 */
 		ret = hugetlb_no_page(mm, vma, mapping, idx, address, ptep, flags);
 		goto out_mutex;
 	}
@@ -4451,6 +4534,7 @@ int hugetlb_reserve_pages(struct inode *inode,
 	 * attempt will be made for VM_NORESERVE to allocate a page
 	 * without using reserves
 	 */
+	/* 指定不需要预留巨型页，直接返回 */
 	if (vm_flags & VM_NORESERVE)
 		return 0;
 
@@ -4461,11 +4545,26 @@ int hugetlb_reserve_pages(struct inode *inode,
 	 * called to make the mapping read-write. Assume !vma is a shm mapping
 	 */
 	if (!vma || vma->vm_flags & VM_MAYSHARE) {
+	/*
+	 * 共享映射，使用文件的索引节点的 resv_map ，在 resv_map 中查看从文件的起始
+	 * 偏移到结束偏移有哪些部分以前没有预留，计算需要预留的巨型页的数量 N
+	 *
+	 * inode.i_mapping->address_space.private_data->resv_map.regions <--->
+	 * file_region.link
+	 */
 		resv_map = inode_resv_map(inode);
 
 		chg = region_chg(resv_map, from, to);
 
 	} else {
+	/*
+	 * 私有映射，创建 resv_map ，虚拟内存区域的成员 vm_private_data 指向
+	 * resv_map ，并且设置标志 HPAGE_RESV_OWNER 指明该虚拟内存区域拥有这个预留，
+	 * 计算需要预留的巨型页的数量 N =(文件的结束偏移 − 起始偏移)， 偏移的单位是
+	 * 巨型页长度
+	 *
+	 * vm_area_struct.vm_private_data->resv_map.regions <---> file_region.link
+	 */
 		resv_map = resv_map_alloc();
 		if (!resv_map)
 			return -ENOMEM;
@@ -4486,6 +4585,14 @@ int hugetlb_reserve_pages(struct inode *inode,
 	 * the subpool has a minimum size, there may be some global
 	 * reservations already in place (gbl_reserve).
 	 */
+	/*
+	 * 如果文件系统创建了巨型页子池，计算子池需要向巨型页池申请预留的巨型页的数
+	 * 量，否则需要向巨型页池申请预留的巨型页的数量是 N 。
+	 * 如果子池以前申请预留的巨型页数量大于或等于 N，那么子池不需要向巨型页池申
+	 * 请预留。
+	 * 如果子池以前申请预留的巨型页数量小于 N，那么子池需要向巨型页池申请预留的
+	 * 数量等于(N − 子池以前申请预留的巨型页数量)
+	 */
 	gbl_reserve = hugepage_subpool_get_pages(spool, chg);
 	if (gbl_reserve < 0) {
 		ret = -ENOSPC;
@@ -4496,6 +4603,7 @@ int hugetlb_reserve_pages(struct inode *inode,
 	 * Check enough hugepages are available for the reservation.
 	 * Hand the pages back to the subpool if there are not
 	 */
+	/* 向巨型页池申请预留指定数量的巨型页 */
 	ret = hugetlb_acct_memory(h, gbl_reserve);
 	if (ret < 0) {
 		/* put back original number of pages, chg */
@@ -4513,6 +4621,10 @@ int hugetlb_reserve_pages(struct inode *inode,
 	 * disappears, the original reservation is the VMA size and the
 	 * consumed reservations are stored in the map. Hence, nothing
 	 * else has to be done for private mappings here
+	 */
+	/*
+	 * 如果是共享映射，那么在预留图的区域链表中增加 1 个 file_region 实例，记录
+	 * 预留区域
 	 */
 	if (!vma || vma->vm_flags & VM_MAYSHARE) {
 		long add = region_add(resv_map, from, to);

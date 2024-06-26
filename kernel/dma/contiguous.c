@@ -47,6 +47,7 @@ static phys_addr_t size_cmdline = -1;
 static phys_addr_t base_cmdline;
 static phys_addr_t limit_cmdline;
 
+/* 格式是 cma=nn[MG]@[start[MG][-end[MG]]] */
 static int __init early_cma(char *p)
 {
 	if (!p) {
@@ -104,6 +105,7 @@ static inline __maybe_unused phys_addr_t cma_early_percent_memory(void)
  * has been activated and all other subsystems have already allocated/reserved
  * memory.
  */
+/* 通过内核参数或配置宏配置全局 CMA 区域 */
 void __init dma_contiguous_reserve(phys_addr_t limit)
 {
 	phys_addr_t selected_size = 0;
@@ -113,6 +115,7 @@ void __init dma_contiguous_reserve(phys_addr_t limit)
 
 	pr_debug("%s(limit %08lx)\n", __func__, (unsigned long)limit);
 
+	/* 通过传参 cma=nn[MG]@[start[MG][-end[MG]]] 配置 CMA */
 	if (size_cmdline != -1) {
 		selected_size = size_cmdline;
 		selected_base = base_cmdline;
@@ -242,6 +245,7 @@ static const struct reserved_mem_ops rmem_cma_ops = {
 	.device_release = rmem_cma_device_release,
 };
 
+/* 通过设备树配置全局 CMA 区域的初始化函数。被 __reserved_mem_init_node 函数调用 */
 static int __init rmem_cma_setup(struct reserved_mem *rmem)
 {
 	phys_addr_t align = PAGE_SIZE << max(MAX_ORDER - 1, pageblock_order);
@@ -267,6 +271,10 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 	/* Architecture specific contiguous memory fixup. */
 	dma_contiguous_early_fixup(rmem->base, rmem->size);
 
+	/*
+	 * 如果指定了属性 linux,cma-default ，那么这个 CMA 区域是默认的 CMA 区域，设
+	 * 置全局变量 dma_contiguous_default_area 指向这个 CMA 区域。
+	 */
 	if (of_get_flat_dt_prop(node, "linux,cma-default", NULL))
 		dma_contiguous_set_default(cma);
 

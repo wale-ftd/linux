@@ -30,6 +30,7 @@ typedef u64 pgdval_t;
 /*
  * These are used to make use of C type-checking..
  */
+/* 页表项的数据结构 */
 typedef struct { pteval_t pte; } pte_t;
 #define pte_val(x)	((x).pte)
 #define __pte(x)	((pte_t) { (x) } )
@@ -46,8 +47,11 @@ typedef struct { pudval_t pud; } pud_t;
 #define __pud(x)	((pud_t) { (x) } )
 #endif
 
+/* 页全局目录表项的数据结构 */
 typedef struct { pgdval_t pgd; } pgd_t;
+/* 把 pgd_t 类型转换成无符号长整数 */
 #define pgd_val(x)	((x).pgd)
+/* 把无符号长整数转换成 pgd_t 类型 */
 #define __pgd(x)	((pgd_t) { (x) } )
 
 typedef struct { pteval_t pgprot; } pgprot_t;

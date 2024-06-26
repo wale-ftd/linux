@@ -460,10 +460,14 @@ static __init int setup_hugepagesz(char *opt)
 
 	switch (ps) {
 #ifdef CONFIG_ARM64_4K_PAGES
+	/* 1GB */
 	case PUD_SIZE:
 #endif
+	/* 32MB */
 	case PMD_SIZE * CONT_PMDS:
+	/* 2MB */
 	case PMD_SIZE:
+	/* 64KB */
 	case PAGE_SIZE * CONT_PTES:
 		add_huge_page_size(ps);
 		return 1;

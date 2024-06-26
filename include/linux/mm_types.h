@@ -99,6 +99,7 @@ struct page {
 			 * 用于 slab 时，作为链表节点加入其中一条 slab 链表
 			 * 用于 slub 时，作为链表节点加入部分空闲 slab 链表
 			 * 用于 slob 时，作为链表节点加入 slab 链表
+			 * 用于 THP 时， pgtable_trans_huge_deposit()
 			 */
 			struct list_head lru;
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
@@ -115,6 +116,8 @@ struct page {
              * 对于 PCP 中的页，存放 migratetype 。如果释放的页面的 migratetype
              * 大于 MIGRATE_PCPTYPES ，会先入 MIGRATE_MOVABLE 中，但其真实的迁移
              * 类型保存在 index 中，见 free_unref_page_commit()
+             *
+             * 空闲时，指向 migratetype 。可见 free_unref_page_prepare()
              */
 			pgoff_t index;		/* Our offset within mapping. */
 			/**
@@ -446,6 +449,7 @@ struct vm_area_struct {
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
 	struct file * vm_file;		/* File we map to (can be NULL). */
+	/* 对于 hugetlb ，存储 resv_map ，且低两位有其它用途，见 HPAGE_RESV_OWNER */
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 
 	atomic_long_t swap_readahead_info;

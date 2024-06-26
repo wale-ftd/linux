@@ -372,6 +372,10 @@ static inline unsigned long tlb_get_unmap_size(struct mmu_gather *tlb)
 
 #endif /* CONFIG_MMU */
 
+/*
+ * 内核把进程从一个处理器迁移到另一个处理器以后，调用该函数以更新页表缓存或上下
+ * 文特定信息
+ */
 #define tlb_migrate_finish(mm) do {} while (0)
 
 #endif /* _ASM_GENERIC__TLB_H */

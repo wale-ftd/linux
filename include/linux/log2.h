@@ -157,6 +157,7 @@ unsigned long __rounddown_pow_of_two(unsigned long n)
  *
  * selects the appropriately-sized optimised version depending on sizeof(n)
  */
+/* ilog2(1024) = 10 */
 #define ilog2(n) \
 ( \
 	__builtin_constant_p(n) ?	\

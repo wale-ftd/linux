@@ -186,7 +186,7 @@ alternative_cb_end
 	mrs	x21, sp_el0
 	/*
 	 * 是一个宏，定义在 arch/arm64/include/asm/assembler.h 。将当前 CPU 运行
-	 * 的进程的 task_struct 结构体赋值给 tsk(x28 寄存器)
+	 * 的进程的 task_struct 结构体赋值给 tsk(tsk 是 x28 寄存器)
 	 */
 	ldr_this_cpu	tsk, __entry_task, x20	// Ensure MDSCR_EL1.SS is clear,
 	ldr	x19, [tsk, #TSK_TI_FLAGS]	// since we can unmask debug
@@ -216,6 +216,7 @@ alternative_cb_end
 	.endif /* \el == 0 */
 	mrs	x22, elr_el1
 	mrs	x23, spsr_el1
+	/* 保存 sp_el0 ， sp_el0 在 el1 中没什么用，可以用来保存当前任务的指针 */
 	stp	lr, x21, [sp, #S_LR]
 
 	/*
@@ -256,7 +257,10 @@ alternative_else_nop_endif
 1:
 #endif
 
-	/* 把 ELR_EL1/SPSR_EL1 的值保存到 pt_regs.pc/pt_regs.pstate */
+	/*
+	 * 把 ELR_EL1/SPSR_EL1 的值保存到 pt_regs.pc/pt_regs.pstate 。异常发生时，硬
+	 * 件会将异常返回地址保存到 elr_el1 ，将 pstate 保存到 spsr_el1
+	 */
 	stp	x22, x23, [sp, #S_PC]
 
 	/* Not in a syscall by default (el0_svc overwrites for real syscall) */

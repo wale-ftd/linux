@@ -63,7 +63,7 @@ enum migratetype {
 	 * 型的页是 steal 产生的
 	 */
 	MIGRATE_MOVABLE,
-	/* 指不可以移动但可以回收的页面 */
+	/* 指不可以移动但可以回收的页面，如文件页 */
 	MIGRATE_RECLAIMABLE,
 	/* PCP 只有以上三种类型的 migratetype */
 	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
@@ -158,6 +158,7 @@ enum numa_stat_item {
 
 enum zone_stat_item {
 	/* First 128 byte cacheline (assuming 64 bit words) */
+	/* 包含 NR_FREE_CMA_PAGES */
 	NR_FREE_PAGES,
 	NR_ZONE_LRU_BASE, /* Used only for compaction and reclaim retry */
 	NR_ZONE_INACTIVE_ANON = NR_ZONE_LRU_BASE,
@@ -174,6 +175,7 @@ enum zone_stat_item {
 #if IS_ENABLED(CONFIG_ZSMALLOC)
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
+	/* NR_FREE_PAGES 的子集 */
 	NR_FREE_CMA_PAGES,
 	NR_VM_ZONE_STAT_ITEMS };
 
@@ -230,6 +232,7 @@ enum node_stat_item {
 enum lru_list {
 	LRU_INACTIVE_ANON = LRU_BASE,
 	LRU_ACTIVE_ANON = LRU_BASE + LRU_ACTIVE,
+	/* 文件页不可移动，只可回收 */
 	LRU_INACTIVE_FILE = LRU_BASE + LRU_FILE,
 	LRU_ACTIVE_FILE = LRU_BASE + LRU_FILE + LRU_ACTIVE,
 	LRU_UNEVICTABLE,

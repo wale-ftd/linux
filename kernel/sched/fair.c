@@ -4118,6 +4118,7 @@ static void
 set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
 	/* 'current' is not kept within the tree. */
+	/* 将 next 进程从红黑树中摘除 */
 	if (se->on_rq) {
 		/*
 		 * Any task has to be enqueued before it get to execute on

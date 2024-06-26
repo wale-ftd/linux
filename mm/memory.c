@@ -2597,8 +2597,10 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 			put_page(vmf->page);
 		}
         /*
-         * reuse_swap_page 判断 page 是否是只有一个进程映射的匿名页面。如果是，可以
-         * 跳转到 wp_page_reuse 中，继续使用这个页面并且不需要写时复制。
+         * reuse_swap_page 判断 page 是否是只有一个进程映射的匿名页面。如果是，
+         * 可以跳转到 wp_page_reuse 中，将这个页面的页表属性从 ro 修改成 rw 后继
+         * 续使用这个页面，而无需写时复制的分配和复制页面(同时这样也会浪费一个页
+         * 面)。
          */
 		if (reuse_swap_page(vmf->page, &total_map_swapcount)) {
 			if (total_map_swapcount == 1) {
@@ -2618,6 +2620,7 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		unlock_page(vmf->page);
 	} else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 					(VM_WRITE|VM_SHARED))) {
+	/* 处理共享文件页 */
 		return wp_page_shared(vmf);
 	}
 
@@ -2890,9 +2893,13 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 	inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 	dec_mm_counter_fast(vma->vm_mm, MM_SWAPENTS);
+	/* 对于私有映射， vm_page_prot 都是只读的 */
 	pte = mk_pte(page, vma->vm_page_prot);
 	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_swap_page(page, NULL)) {
-	/* 如果是写中断缺页以及只有 1 个进程使用此 page ， 删除 swapcache */
+	/*
+	 * 如果是写中断缺页以及只有 1 个进程使用此 page ，将 pte 设置为可写，可以减
+	 * 少一次 write proctect
+	 */
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
 		vmf->flags &= ~FAULT_FLAG_WRITE;
 		ret |= VM_FAULT_WRITE;
@@ -3566,7 +3573,7 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	if (vma->vm_ops->map_pages && fault_around_bytes >> PAGE_SHIFT > 1) {
         /*
          * do_fault_around()只是和现存的页面高速缓存提前建立映射关系，是不会
-         * 新建页面高速缓存的。
+         * 新建页面高速缓存和读磁盘的。
          */
 		ret = do_fault_around(vmf);
 		if (ret)
@@ -3587,7 +3594,8 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 
 /*
  * 处理由写内存导致的 page fault ，而且 VMA 的属性是具有私有映射的，也就是
- * 处理在私有文件映射的 VMA 中发生了写时复制。如加载动态共享库(会写 GOT 表？)
+ * 处理在私有文件映射的 VMA 中发生了写时复制。如加载可执行文件的 data 段后修改全
+ * 局变量；加载动态共享库后修改 GOT 表等
  */
 static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 {
@@ -3600,6 +3608,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
     /*
      * 以 GFP_HIGHUSER | __GFP_MOVABLE 为分配掩码，为 cow_page 分配一个新
      * 的物理页面，也就是优先使用高端内存。
+     *
+     * cow_page 其实是一个私有匿名页面。
      */
 	vmf->cow_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 	if (!vmf->cow_page)
@@ -3611,20 +3621,19 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 		return VM_FAULT_OOM;
 	}
 
-    /* 读取文件内容到 vmf->page 页面里 */
+    /* 读取文件内容到 vmf->page 页面里，其实就是 pagecache */
 	ret = __do_fault(vmf);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;
 	if (ret & VM_FAULT_DONE_COW)
 		return ret;
 
-    /* 复制页面内容 */
+    /* 复制 pagecache 的内容到 cow 页面 */
 	copy_user_highpage(vmf->cow_page, vmf->page, vmf->address, vma);
 	__SetPageUptodate(vmf->cow_page);
 
 	ret |= finish_fault(vmf);
 	unlock_page(vmf->page);
-    /* 释放页面 */
 	put_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;
@@ -3746,9 +3755,10 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 	} else if (!(vmf->flags & FAULT_FLAG_WRITE))
 		ret = do_read_fault(vmf);
 	else if (!(vma->vm_flags & VM_SHARED))
-	/* VMA 属于私有映射 */
+	/* 写私有文件 */
 		ret = do_cow_fault(vmf);
 	else
+	/* 写共享文件 */
 		ret = do_shared_fault(vmf);
 
 	/* preallocated pagetable is unused: free it */
@@ -3936,7 +3946,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 
-	/* vmf 参数中只有 PMD ，所以先判断 PMD 是否为空 */
+	/* PT 的上一级是 PMD ，所以先判断 PMD 是否为空 */
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
 		 * Leave __pte_alloc() until later: because vm_ops->fault may
@@ -3995,9 +4005,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	 * 被清空了(调用了ptep_get_and_clear()函数)
 	 */
 		if (vma_is_anonymous(vmf->vma))
+		/* 读写私有匿名页 */
 			return do_anonymous_page(vmf);
 		else
-        /* 文件映射 或 shmem */
+        /* 读写文件页 和 读写共享匿名页 */
 			return do_fault(vmf);
 	}
 
@@ -4083,6 +4094,10 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	vmf.pud = pud_alloc(mm, p4d, address);
 	if (!vmf.pud)
 		return VM_FAULT_OOM;
+	/*
+	 * 首先尝试在页上层目录分配巨型页。如果触发异常的虚拟地址所属的虚拟巨型页超
+	 * 出虚拟内存区域，或者分配巨型页失败，那么回退，尝试在页中间目录分配巨型页
+	 */
 	if (pud_none(*vmf.pud) && __transparent_hugepage_enabled(vma)) {
 		ret = create_huge_pud(&vmf);
 		if (!(ret & VM_FAULT_FALLBACK))
@@ -4109,6 +4124,10 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	vmf.pmd = pmd_alloc(mm, vmf.pud, address);
 	if (!vmf.pmd)
 		return VM_FAULT_OOM;
+	/*
+	 * 尝试在页中间目录分配巨型页。如果触发异常的虚拟地址所属的虚拟巨型页超出虚
+	 * 拟内存区域，或者分配巨型页失败，那么回退，尝试分配普通页
+	 */
 	if (pmd_none(*vmf.pmd) && __transparent_hugepage_enabled(vma)) {
 		ret = create_huge_pmd(&vmf);
 		if (!(ret & VM_FAULT_FALLBACK))
@@ -4139,6 +4158,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		}
 	}
 
+	/* 分配普通页 */
 	return handle_pte_fault(&vmf);
 }
 

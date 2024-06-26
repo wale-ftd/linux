@@ -63,8 +63,10 @@ enum vm_event_item { PGPGIN, PGPGOUT, PSWPIN, PSWPOUT,
 #ifdef CONFIG_HUGETLB_PAGE
 		HTLB_BUDDY_PGALLOC, HTLB_BUDDY_PGALLOC_FAIL,
 #endif
+		/* evictable -> unevictable */
 		UNEVICTABLE_PGCULLED,	/* culled to noreclaim list */
 		UNEVICTABLE_PGSCANNED,	/* scanned for reclaimability */
+		/* unevictable -> evictable */
 		UNEVICTABLE_PGRESCUED,	/* rescued from noreclaim list */
 		UNEVICTABLE_PGMLOCKED,
 		UNEVICTABLE_PGMUNLOCKED,

@@ -669,6 +669,10 @@ void __init early_init_fdt_scan_reserved_mem(void)
 		early_init_dt_reserve_memory_arch(base, size, 0);
 	}
 
+	/*
+	 * 解析设备树二进制文件中的节点 reserved-memory ，把保留内存块添加到
+	 * memblock 的 reserved 类型
+	 */
 	of_scan_flat_dt(__fdt_scan_reserved_mem, NULL);
 	fdt_init_reserved_mem();
 }

@@ -90,6 +90,7 @@
 #define atomic_xchg_release(v, new)	xchg_release(&((v)->counter), (new))
 #define atomic_xchg(v, new)		xchg(&((v)->counter), (new))
 
+/* v->counter != old ? : v->counter = new; old */
 #define atomic_cmpxchg_relaxed(v, old, new)				\
 	cmpxchg_relaxed(&((v)->counter), (old), (new))
 #define atomic_cmpxchg_acquire(v, old, new)				\
@@ -152,6 +153,7 @@
 #define atomic64_xchg_release		atomic_xchg_release
 #define atomic64_xchg			atomic_xchg
 
+/* v->counter != old ? : v->counter = new; old */
 #define atomic64_cmpxchg_relaxed	atomic_cmpxchg_relaxed
 #define atomic64_cmpxchg_acquire	atomic_cmpxchg_acquire
 #define atomic64_cmpxchg_release	atomic_cmpxchg_release

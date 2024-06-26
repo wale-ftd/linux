@@ -27,16 +27,35 @@
 #include <asm/smp.h>
 #include <asm/tlbflush.h>
 
+/* 保存 ASID 长度 */
 static u32 asid_bits;
 static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
 
-/* [31:asid_bis] 存放软件管理用的软件 generation 计数 */
+/*
+ * [63:asid_bis] 存放软件管理用的软件 generation 计数。当 asid generation 加 1
+ * 时，每个处理器需要清空页表缓存
+ */
 static atomic64_t asid_generation;
-/* 硬件 ASID 通过位图来管理 */
+/* 硬件 ASID 通过位图来管理，记录哪些 ASID 被分配 */
 static unsigned long *asid_map;
 
+/* 保存处理器正在使用的 ASID ，即处理器正在执行的进程的 ASID */
 static DEFINE_PER_CPU(atomic64_t, active_asids);
+/*
+ * 存放保留的 ASID ，用来在 asid generation 加 1 时保存处理器正在执行的进程的
+ * ASID 。
+ *
+ * 处理器给进程分配 ASID 时， 如果 ASID 分配完了，那么把 asid generation 加 1 ，
+ * 重新从 1 开始分配 ASID ，针对每个处理器，使用该处理器的 reserved_asids 保存该
+ * 处理器正在执行的进程的 ASID ， 并且把该处理器的 active_asids 设置为 0 。
+ * active_asids 为 0 具有特殊含义，说明全局 asid generation 有变化， ASID 从最大
+ * 值回绕到 1
+ */
 static DEFINE_PER_CPU(u64, reserved_asids);
+/*
+ * 保存需要清空页表缓存的处理器集合。当 asid generation 加 1 时，每个处理器需要
+ * 清空页表缓存
+ */
 static cpumask_t tlb_flush_pending;
 
 #define ASID_MASK		(~GENMASK(asid_bits - 1, 0))
@@ -44,7 +63,7 @@ static cpumask_t tlb_flush_pending;
 
 /* 有定义 */
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
-/* 使能 KPTI 后，每个进程要用两个 asid ，所以 asid 的总数会减半 */
+/* == 32768 。使能 KPTI 后，每个进程要用两个 asid ，所以 asid 的总数会减半 */
 #define NUM_USER_ASIDS		(ASID_FIRST_VERSION >> 1)
 #define asid2idx(asid)		(((asid) & ~ASID_MASK) >> 1)
 #define idx2asid(idx)		(((idx) << 1) & ~ASID_MASK)
@@ -92,15 +111,21 @@ void verify_cpu_asid_bits(void)
 	}
 }
 
-/* 把 asid_map 清零，刷新所有 CPU 上的 TLB */
+/* 重新初始化 ASID 分配状态 */
 static void flush_context(void)
 {
 	int i;
 	u64 asid;
 
 	/* Update the list of reserved ASIDs and the ASID bitmap. */
+	/* 把 asid 位图清零 */
 	bitmap_clear(asid_map, 0, NUM_USER_ASIDS);
 
+	/*
+	 * 把每个处理器的 active_asids 设置为 0 ， active_asids 为 0 具有特殊含义，
+	 * 说明全局 ASID 版本号变化， ASID 回绕。 然后把每个处理器正在执行的进程的
+	 * ASID 设置为保留 ASID ，为保留 ASID 在 ASID 位图中设置已分配的标志
+	 */
 	for_each_possible_cpu(i) {
 		asid = atomic64_xchg_relaxed(&per_cpu(active_asids, i), 0);
 		/*
@@ -119,6 +144,10 @@ static void flush_context(void)
 	/*
 	 * Queue a TLB invalidation for each CPU to perform on next
 	 * context-switch
+	 */
+	/*
+	 * 所有处理器需要清空页表缓存，在位图 tlb_flush_pending 中设置所有处理器对应
+	 * 的位
 	 */
 	cpumask_setall(&tlb_flush_pending);
 }
@@ -154,8 +183,8 @@ static u64 new_context(struct mm_struct *mm)
 	u64 generation = atomic64_read(&asid_generation);
 
     /*
-     * 刚创建进程时， mm->context.id 值初始化为 0 。如果这时 ASID 不为 0，
-     * 说明该进程已经分配过 ASID
+     * 刚创建进程时， mm->context.id 值初始化为 0 。如果这时 ASID 不为 0，说明该
+     * 进程已经分配过 ASID
      */
 	if (asid != 0) {
 		u64 newasid = generation | (asid & ~ASID_MASK);
@@ -165,8 +194,8 @@ static u64 new_context(struct mm_struct *mm)
 		 * can continue to use it and this was just a false alarm.
 		 */
         /*
-         * 如果原来的 ASID 还有效(通过 check_update_reserved_asid()判断)，只
-         * 需要再加上新的 generation 值即可组成一个新的软件 ASID 。
+         * 如果原来的 ASID 还有效(通过 check_update_reserved_asid()判断)，只需要
+         * 更新 generation 即可组成一个新的软件 ASID 。
          */
 		if (check_update_reserved_asid(asid, newasid))
 			return newasid;
@@ -176,10 +205,8 @@ static u64 new_context(struct mm_struct *mm)
 		 * it if possible.
 		 */
 		/*
-		 * 如果之前的硬件 ASID 不能使用，那么从 asid_map 中查找第一个空闲的位
-		 * 并将其作为这次的硬件 ASID 。注意： 0 号的 ASID 预留给 init_mm 使用。
-         * 另外，在使能了 CONFIG_UNMAP_KERNEL_AT_EL0 配置的内核里为每个进程分
-         * 配两个 ASID ，即奇、偶数组配成一对。
+		 * 如果旧 ASID 在位图中是空闲的，那么继续使用旧的 ASID，只需更新
+		 * generation 即可组成一个新的软件 ASID 。
 		 */
 		if (!__test_and_set_bit(asid2idx(asid), asid_map))
 			return newasid;
@@ -192,27 +219,37 @@ static u64 new_context(struct mm_struct *mm)
 	 * a reserved TTBR0 for the init_mm and we allocate ASIDs in even/odd
 	 * pairs.
 	 */
+	/* 从上一次分配的 ASID 开始分配 ASID ，如果存在空闲的 ASID ，那么分配给进程 */
 	asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, cur_idx);
 	if (asid != NUM_USER_ASIDS)
 		goto set_asid;
 
-    /* 发生了溢出，提升 generation 值 */
+    /* 如果 ASID 已经分配完，那么提升 generation 值 */
 	/* We're out of ASIDs, so increment the global generation count */
 	generation = atomic64_add_return_relaxed(ASID_FIRST_VERSION,
 						 &asid_generation);
-    /* 把 asid_map 清零，刷新所有 CPU 上的 TLB */
+    /* 重新初始化 ASID 分配状态，如把 asid_map 清零、刷新所有 CPU 上的 TLB */
 	flush_context();
 
 	/* We have more ASIDs than CPUs, so this will always succeed */
+	/* 从 1 开始分配 ASID */
 	asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, 1);
 
 set_asid:
+	/* 为刚分配的 ASID 在位图中设置已分配的标志 */
 	__set_bit(asid, asid_map);
+	/*
+	 * 使用静态变量 cur_idx 记录刚分配的 ASID ，下次分配 ASID 时从这次分配的
+	 * ASID 开始查找
+	 */
 	cur_idx = asid;
 	return idx2asid(asid) | generation;
 }
 
-/* 完成与架构相关的硬件设置，如刷新 TLB 和设置硬件页表等 */
+/*
+ * 完成与架构相关的硬件设置，如是否需要给进程重新分配 ASID 、刷新 TLB 和设置硬件
+ * 页表等
+ */
 void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 {
 	unsigned long flags;
@@ -250,9 +287,15 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 	 */
 	old_active_asid = atomic64_read(&per_cpu(active_asids, cpu));
 	if (old_active_asid &&
-        /* 异或来判断两个值是否相等 */
+        /* 异或来判断进程的 genaration 和全局的是否相等。相等为 0 ，不相等为 1 */
 	    !((asid ^ atomic64_read(&asid_generation)) >> asid_bits) &&
-	    /* 设置新的 ASID 到 active_asids 中 */
+	    /*
+	     * 如果 active_asids 的旧值不是 0 ，那么说明前后两条语句之间，其他处理器
+	     * 没有更新全局 asid generation ，可以执行快速路径(跳转到标号
+	     * switch_mm_fastpath 去设置寄存器 TTBR0_EL1)。如果 active_asids 的旧值
+	     * 是 0 ，说明说明前后两条语句之间其他处理器在分配 ASID 时把全局 asid
+	     * generation 加 1 了，那么执行慢速路径。
+	     */
 	    atomic64_cmpxchg_relaxed(&per_cpu(active_asids, cpu),
 				     old_active_asid, asid))
         /*
@@ -267,18 +310,25 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 	/* Check that our ASID belongs to the current generation. */
 	asid = atomic64_read(&mm->context.id);
     /*
-     * 重新做一次软件 generation 计数的比较，如果还是不相同，说明至少发生了
-     * 一次 ASID 硬件溢出，需要分配一个新的软件 ASID 计数
+     * 在申请自旋锁 cpu_asid_lock 之后重新做一次进程和全局软件 generation 计数的
+     * 比较，如果还是不相同，说明至少发生了一次 ASID 硬件溢出，需要分配一个新的
+     * 软件 ASID 计数
      */
 	if ((asid ^ atomic64_read(&asid_generation)) >> asid_bits) {
 		asid = new_context(mm);
 		atomic64_set(&mm->context.id, asid);
 	}
 
-    /* ASID 硬件溢出，需要刷新本地的 TLB */
+    /*
+     * ASID 硬件溢出，需要刷新本地的 TLB 。如果位图 tlb_flush_pending 中当前处理
+     * 器对应的位被设置，那么把当前处理器的页表缓存清空。当全局 ASID 版本号加 1
+     * 时，需要把所有处理器的页表缓存清空，在位图 tlb_flush_pending 中把所有处理
+     * 器对应的位设置
+     */
 	if (cpumask_test_and_clear_cpu(cpu, &tlb_flush_pending))
 		local_flush_tlb_all();
 
+	/* 把当前处理器的 active_asids 设置为进程的 ASID */
 	atomic64_set(&per_cpu(active_asids, cpu), asid);
 	raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
 
@@ -289,6 +339,11 @@ switch_mm_fastpath:
 	/*
 	 * Defer TTBR0_EL1 setting for user threads to uaccess_enable() when
 	 * emulating PAN.
+	 */
+	/*
+	 * 如果不需要通过切换寄存器 TTBR0_EL1 仿真 PAN 特性，那么调用函数
+	 * cpu_switch_mm 设置寄存器 TTBR0_EL1 ，否则延迟到进程从内核模式返回用户模式
+	 * 时设置寄存器 TTBR0_EL1 。
 	 */
 	if (!system_uses_ttbr0_pan())
         /* 进行页表的切换 */

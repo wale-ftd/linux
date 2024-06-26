@@ -61,6 +61,7 @@
 #if CONFIG_PGTABLE_LEVELS > 2
 /* PMD_SHIFT = 21 */
 #define PMD_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(2)
+/* 2M */
 #define PMD_SIZE		(_AC(1, UL) << PMD_SHIFT)
 #define PMD_MASK		(~(PMD_SIZE-1))
 #define PTRS_PER_PMD		PTRS_PER_PTE
@@ -72,6 +73,7 @@
 #if CONFIG_PGTABLE_LEVELS > 3
 /* PUD_SHIFT = 30 */
 #define PUD_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(1)
+/* 1G */
 #define PUD_SIZE		(_AC(1, UL) << PUD_SHIFT)
 #define PUD_MASK		(~(PUD_SIZE-1))
 #define PTRS_PER_PUD		PTRS_PER_PTE
@@ -198,6 +200,12 @@
  *   2. 若未使能，硬件会产生一个访问位的 page fault 来通知软件，然后软件就可以设
  *      置访问标志位为 1 。
  * 当 AF 为 1 时，表示该页面已经被访问过。
+ *
+ * AF 置位原理：当访问虚拟地址时，会先在 TLB 查找虚拟地址到物理地址的映射，如果
+ *              TLB 未建立映射，则会建立映射，同时设置 AF 位。
+ * 问：当把某页的 AF 位清除后未 invalid 对应的 TLB ，下次访问该页时，硬件还会自
+ *     动设置 AF 位吗？
+ * 答：不会。所以在清除某页的 AF 位时要 invalid 对应的 TLB 。
  */
 #define PTE_AF			(_AT(pteval_t, 1) << 10)	/* Access Flag */
 /*

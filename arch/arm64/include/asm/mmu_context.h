@@ -49,6 +49,7 @@ static inline void contextidr_thread_switch(struct task_struct *next)
 /*
  * Set TTBR0 to empty_zero_page. No translations will be possible via TTBR0.
  */
+/* 将 ttbr0_el1 指向空表。防止在内核态访问进程地址空间 */
 static inline void cpu_set_reserved_ttbr0(void)
 {
 	unsigned long ttbr = phys_to_ttbr(__pa_symbol(empty_zero_page));
@@ -191,13 +192,6 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu);
 
 /* 未定义 */
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
-/*
- * 如果处理器不支持 PAN 特性，那么内核通过切换寄存器 TTBR0_EL1 仿真 PAN 特性：进
- * 程进入内核模式时把寄存器 TTBR0_EL1 设置为保留的地址空间标识符 0 和内核的页全
- * 局目录(swapper_pg_dir)后面的保留区域的物理地址，退出内核模式时把寄存器
- * TTBR0_EL1 设置为进程的地址空间标识符和页全局目录的物理地址。使用保留的地址空
- * 间标识符 0 可以避免命中页表缓存的表项，防止内核访问用户虚拟地址
- */
 static inline void update_saved_ttbr0(struct task_struct *tsk,
 				      struct mm_struct *mm)
 {
@@ -250,6 +244,10 @@ static inline void __switch_mm(struct mm_struct *next)
 	 * 切换到内核的内存描述符 init_mm (见 idle_task_exit())
 	 */
 	if (next == &init_mm) {
+		/*
+		 * init_mm.pgd 没有包含任何用户虚拟地址的映射，对于 TTBR1 的内核虚拟地址
+		 * 总是有效的。只设置保留的 TTBR0
+		 */
 		cpu_set_reserved_ttbr0();
 		return;
 	}

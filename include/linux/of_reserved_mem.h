@@ -26,6 +26,10 @@ struct reserved_mem_ops {
 
 typedef int (*reservedmem_of_init_fn)(struct reserved_mem *rmem);
 
+/*
+ * 将定义的变量放入 __reservedmem_of_table 段里，最终会被
+ * __reserved_mem_init_node 函数依次调用
+ */
 #define RESERVEDMEM_OF_DECLARE(name, compat, init)			\
 	_OF_DECLARE(reservedmem, name, compat, init, reservedmem_of_init_fn)
 

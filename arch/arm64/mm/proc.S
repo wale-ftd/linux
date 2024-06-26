@@ -166,10 +166,7 @@ ENTRY(cpu_do_switch_mm)
 	mrs	x2, ttbr1_el1
 	/* mmid 是一个宏，实现在 arch/arm64/include/asm/assembler.h */
 	mmid	x1, x1				// get mm->context.id
-	/*
-	 * phys_to_ttbr 是一个宏，实现在 arch/arm64/include/asm/pgtable.h ，对于
-	 * 48 位的地址总线，它是一个空操作
-	 */
+	/* phys_to_ttbr 是一个宏，实现在 arch/arm64/include/asm/assembler.h */
 	phys_to_ttbr x3, x0
 
 alternative_if ARM64_HAS_CNP

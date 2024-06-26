@@ -254,6 +254,7 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_ACCOUNT	0x00100000	/* Is a VM accounted object */
 /* 表示不需要预留物理内存 */
 #define VM_NORESERVE	0x00200000	/* should the VM suppress accounting */
+/* 表示允许使用标准巨型页 */
 #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
 #define VM_SYNC		0x00800000	/* Synchronous page faults */
 #define VM_ARCH_1	0x01000000	/* Architecture-specific flag */
@@ -273,6 +274,7 @@ extern unsigned int kobjsize(const void *objp);
 #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
 /* 表示虚拟内存区域使用 transparent hugepage */
 #define VM_HUGEPAGE	0x20000000	/* MADV_HUGEPAGE marked this vma */
+/* 表示虚拟内存区域不允许使用 transparent hugepage */
 #define VM_NOHUGEPAGE	0x40000000	/* MADV_NOHUGEPAGE marked this vma */
 #define VM_MERGEABLE	0x80000000	/* KSM may merge identical pages */
 
@@ -2096,6 +2098,7 @@ static inline void pgtable_pmd_page_dtor(struct page *page)
 	ptlock_free(page);
 }
 
+/* 是这个 */
 #define pmd_huge_pte(mm, pmd) (pmd_to_page(pmd)->pmd_huge_pte)
 
 #else

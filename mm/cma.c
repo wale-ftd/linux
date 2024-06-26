@@ -78,6 +78,13 @@ static unsigned long cma_bitmap_aligned_offset(const struct cma *cma,
 		>> cma->order_per_bit;
 }
 
+/*
+ * 假如 order_per_bit = 1
+ * pages  ret
+ *   1     1
+ *   2     1
+ *   3     2
+ */
 static unsigned long cma_bitmap_pages_to_bits(const struct cma *cma,
 					      unsigned long pages)
 {
@@ -146,6 +153,10 @@ not_in_zone:
 	return -EINVAL;
 }
 
+/*
+ * 负责把所有 CMA 区域的物理页释放给伙伴分配器。针对每个 CMA 区域，先把页块的迁
+ * 移类型设置为 MIGRATE_CMA ，然后调用函数 __free_pages ，把页块释放给伙伴分配器
+ */
 static int __init cma_init_reserved_areas(void)
 {
 	int i;
@@ -173,6 +184,7 @@ core_initcall(cma_init_reserved_areas);
  *
  * This function creates custom contiguous area from already reserved memory.
  */
+/* 从数组 cma_areas 分配一个数组项，保存 CMA 区域的起始页帧号和页数 */
 int __init cma_init_reserved_mem(phys_addr_t base, phys_addr_t size,
 				 unsigned int order_per_bit,
 				 const char *name,
@@ -400,6 +412,10 @@ static inline void cma_debug_show_areas(struct cma *cma) { }
  * This function allocates part of contiguous memory on specific
  * contiguous memory area.
  */
+/*
+ * 负责从 CMA 区域分配内存。需要处理：当设备驱动程序需要使用 CMA 区域的时候，如
+ * 果 CMA 区域中的物理页已经被页分配器分配出去，需要把物理页迁移到其他地方
+ */
 struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 		       bool no_warn)
 {
@@ -430,6 +446,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 
 	for (;;) {
 		mutex_lock(&cma->lock);
+		/* 在 CMA 区域的位图中查找一个足够大的空闲页块 */
 		bitmap_no = bitmap_find_next_zero_area_off(cma->bitmap,
 				bitmap_maxno, start, bitmap_count, mask,
 				offset);
@@ -437,6 +454,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 			mutex_unlock(&cma->lock);
 			break;
 		}
+		/* 在位图中把物理页的分配状态设置为已分配 */
 		bitmap_set(cma->bitmap, bitmap_no, bitmap_count);
 		/*
 		 * It's safe to drop the lock here. We've marked this region for
@@ -447,6 +465,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 
 		pfn = cma->base_pfn + (bitmap_no << cma->order_per_bit);
 		mutex_lock(&cma_mutex);
+		/* 把 cma 区域中被临时借用的物理页迁移到其他地方 */
 		ret = alloc_contig_range(pfn, pfn + count, MIGRATE_CMA,
 				     GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
 		mutex_unlock(&cma_mutex);
@@ -458,6 +477,8 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 		cma_clear_bitmap(cma, pfn, count);
 		if (ret != -EBUSY)
 			break;
+
+		/* 查找下一个足够大的空闲页块并尝试分配，直到分配成功或者尝试完所有空闲页块 */
 
 		pr_debug("%s(): memory range at %p is busy, retrying\n",
 			 __func__, pfn_to_page(pfn));
@@ -508,12 +529,15 @@ bool cma_release(struct cma *cma, const struct page *pages, unsigned int count)
 
 	pfn = page_to_pfn(pages);
 
+	/* 检查物理页是否属于 CMA 区域 */
 	if (pfn < cma->base_pfn || pfn >= cma->base_pfn + cma->count)
 		return false;
 
 	VM_BUG_ON(pfn + count > cma->base_pfn + cma->count);
 
+	/* 把物理页释放给页分配器 */
 	free_contig_range(pfn, count);
+	/* 在 CMA 区域的位图中把物理页的分配状态设置为空闲 */
 	cma_clear_bitmap(cma, pfn, count);
 	trace_cma_release(pfn, pages, count);
 

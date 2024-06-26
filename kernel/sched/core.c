@@ -2860,6 +2860,10 @@ context_switch(struct rq *rq, struct task_struct *prev,
 {
 	struct mm_struct *mm, *oldmm;
 
+	/*
+	 * 执行进程切换的准备工作。如设置 next->on_cpu 、调用每种处理器架构必须定义
+	 * 的函数 prepare_arch_switch
+	 */
 	prepare_task_switch(rq, prev, next);
 
 	mm = next->mm;
@@ -2887,15 +2891,34 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		/*
 		 * 通知处理器架构不需要切换用户虚拟地址空间，这种加速进程切换的技术称
 		 * lazy TLB。 ARM64 架构定义的函数 enter_lazy_tlb 是一个空函数。
+		 *
+		 * 为什么会引入 lazy tlb ？
+		 * 是否只要页目录或页表内容发生了变化就一定要刷新 TLB 的内容呢？答案是不
+		 * 一定。如果有把握地知道可能发生的变化绝不会影响 CPU 的运行，就没有刷新
+		 * TLB 的必要。我们不妨这样想：内核中代码所占的页面是不会改变的，其它的
+		 * 页面也没有换入/换出的问题，而内核线程又没有用户空间，所以与页面的换入/
+		 * 换出无关。事实上，内核中可能改变页面映射的只有几种情况，一种与
+		 * vmalloc()有关。另一种与 HIGHMEM 的映射有关，还有就是与外设总线(如 PCI
+		 * 总线)有关的映射。因此，只要一个内核线程与这些操作无关，那么这个内核线
+		 * 程就可以"任凭风浪起，稳坐钓鱼船"。所以，在一些特殊的情况下，CPU 虽然
+		 * 还在使用属于某个虚拟空间的页目录或页表，但是即使这些页目录或页表发生
+		 * 了变化也没有必要刷新 TLB 的内容。例如，在执行系统调用 exit()的过程中，
+		 * 即使当前进程的页目录或页表发生了变化，也已经没有必要更新 TLB 的内容了。
+		 * 还有一种情况是，当 CPU 切换到一个不具有用户空间的内核线程时，要借用在
+		 * 它之前运行的那个进程的 active_mm ，所以此时进程切换了，但是页目录和页
+		 * 表没有切换。然而，在运行这个内核线程的期间，即使用户空间的页目录或页
+		 * 表发生了变化也没有必要更新 TLB 的内容，因为内核线程本来就没有用户空间。
+		 * 在这样的情况下，可以通过 enter_lazy_tlb()将当前 CPU 的 TLB 状态设置成
+		 * lazy(表示懒得更新)
 		 */
 		enter_lazy_tlb(oldmm, next);
 	} else
-    /* next 是普通进程，切换到 next 进程的进程地址空间。其实就是 switch_mm() */
+    /* next 是普通进程，切换到 next 的进程地址空间。其实就是 switch_mm() */
 		switch_mm_irqs_off(oldmm, mm, next);
 
 	if (!prev->mm) {
     /* prev 是一个内核线程 */
-        /* prev 马上就要被换出 */
+        /* 断开 pre 与借用的用户虚拟地址空间的联系 */
 		prev->active_mm = NULL;
         /*
          * 把它借用的用户虚拟地址空间保存在运行队列的成员 prev_mm 中，在
@@ -2911,6 +2934,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	/* Here we just switch the register state and the stack. */
     /* 切换到 next 进程的内核栈和硬件上下文件 */
 	switch_to(prev, next, prev);
+	/* 编译器优化屏障，防止编译器优化时调整它的前后语句的顺序 */
 	barrier();
 
     /* 在 next 进程中做 prev 进程的清理工作 */

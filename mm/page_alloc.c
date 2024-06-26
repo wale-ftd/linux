@@ -1836,8 +1836,10 @@ void __init init_cma_reserved_pageblock(struct page *page)
 		set_page_count(p, 0);
 	} while (++p, --i);
 
+	/* 设置 pageblock 的迁移类型 */
 	set_pageblock_migratetype(page, MIGRATE_CMA);
 
+	/* 释放回伙伴系统 */
 	if (pageblock_order >= MAX_ORDER) {
 		i = pageblock_nr_pages;
 		p = page;
@@ -2621,7 +2623,10 @@ retry:
 	/* 从指定迁移类型分配页 */
 	page = __rmqueue_smallest(zone, order, migratetype);
 	if (unlikely(!page)) {
-		/* 如果指定迁移类型是可移动类型，那么从 CMA 类型盗用页 */
+		/*
+		 * 当设备驱动程序不使用 CMA 区域的时候，内核的其他模块可以借用 CMA 区域
+		 * 的物理页，页分配器只允许可移动类型从 CMA 类型借用物理页
+		 */
 		if (migratetype == MIGRATE_MOVABLE)
 			page = __rmqueue_cma_fallback(zone, order);
 
@@ -8415,10 +8420,12 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 			break;
 		}
 
+		/* 回收干净的文件页，文件页不可移动，只可回收 */
 		nr_reclaimed = reclaim_clean_pages_from_list(cc->zone,
 							&cc->migratepages);
 		cc->nr_migratepages -= nr_reclaimed;
 
+		/* 把可移动的物理页迁移到其他地方 */
 		ret = migrate_pages(&cc->migratepages, alloc_migrate_target,
 				    NULL, 0, cc->mode, MR_CONTIG_RANGE);
 	}
@@ -8498,6 +8505,10 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	 * put back to page allocator so that buddy can use them.
 	 */
 
+	/*
+	 * 把物理页的迁移类型设置为隔离类型(MIGRATE_ISOLATE)，隔离物理页，防止页分配
+	 * 器把空闲页/被临时借用的页分配出去
+	 */
 	ret = start_isolate_page_range(pfn_max_align_down(start),
 				       pfn_max_align_up(end), migratetype, 0);
 	if (ret)
@@ -8513,6 +8524,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	 * allocated.  So, if we fall through be sure to clear ret so that
 	 * -EBUSY is not accidentally used or returned to caller.
 	 */
+	/* 处理被临时借用的物理页 */
 	ret = __alloc_contig_migrate_range(&cc, start, end);
 	if (ret && ret != -EBUSY)
 		goto done;
@@ -8570,6 +8582,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	}
 
 	/* Grab isolated pages from freelists. */
+	/* 处理空闲页/临时借用的页，把它们从页分配器的空闲链表中删除 */
 	outer_end = isolate_freepages_range(&cc, outer_start, end);
 	if (!outer_end) {
 		ret = -EBUSY;
@@ -8583,6 +8596,7 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 		free_contig_range(end, outer_end - end);
 
 done:
+	/* 撤销对物理页的隔离，把物理页的迁移类型设置为 CMA 类型 */
 	undo_isolate_page_range(pfn_max_align_down(start),
 				pfn_max_align_up(end), migratetype);
 	return ret;

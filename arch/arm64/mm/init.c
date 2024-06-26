@@ -475,7 +475,7 @@ void __init arm64_memblock_init(void)
 	/*
 	 * 从设备树二进制文件中的内存保留区域(memory reserve map ，对应设备树源文件
 	 * 的字段 /memreserve/)和节点 /reserved-memory 读取保留的物理内存范围，添加
-	 * 到 memblock.reserved 中
+	 * 到 memblock.reserved 中。如通过设备树配置全局 CMA 区域
 	 */
 	early_init_fdt_scan_reserved_mem();
 
@@ -491,6 +491,7 @@ void __init arm64_memblock_init(void)
 
 	high_memory = __va(memblock_end_of_DRAM() - 1) + 1;
 
+	/* 通过内核参数或配置宏配置全局 CMA 区域 */
 	dma_contiguous_reserve(arm64_dma_phys_limit);
 }
 
