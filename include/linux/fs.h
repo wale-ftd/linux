@@ -1441,6 +1441,7 @@ struct super_block {
 	 * s_fsnotify_marks together for cache efficiency. They are frequently
 	 * accessed and rarely modified.
 	 */
+	/* ext2_sb_info */
 	void			*s_fs_info;	/* Filesystem private info */
 
 	/* Granularity of c/m/atime in ns (cannot be worse than a second) */
@@ -1803,6 +1804,10 @@ struct iov_iter;
 struct file_operations {
 	struct module *owner;
 	loff_t (*llseek) (struct file *, loff_t, int);
+	/*
+	 * read 和 read_iter 的区别是： read 方法只能传入一个连续的缓冲区，
+	 * read_iter 方法可以传入多个分散的缓冲区
+	 */
 	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
 	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
 	/* 如 ext4_file_read_iter() */
@@ -1920,6 +1925,7 @@ extern loff_t vfs_dedupe_file_range_one(struct file *src_file, loff_t src_pos,
 					loff_t len, unsigned int remap_flags);
 
 
+/* ext2_sops */
 struct super_operations {
    	struct inode *(*alloc_inode)(struct super_block *sb);
 	void (*destroy_inode)(struct inode *);

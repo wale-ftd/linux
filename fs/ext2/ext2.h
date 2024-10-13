@@ -196,10 +196,17 @@ static inline struct ext2_sb_info *EXT2_SB(struct super_block *sb)
 /*
  * Structure of a blocks group descriptor
  */
+/* All the block groups in the filesystem have the same size and are stored
+ * sequentially, thus the kernel can derive the location of a block group in a
+ * disk simply from its integer index
+ */
 struct ext2_group_desc
 {
+	/* block bitmap 所有的块号 */
 	__le32	bg_block_bitmap;		/* Blocks bitmap block */
+	/* inode bitmap 所有的块号 */
 	__le32	bg_inode_bitmap;		/* Inodes bitmap block */
+	/* inode table 所有的块号 */
 	__le32	bg_inode_table;		/* Inodes table block */
 	__le16	bg_free_blocks_count;	/* Free blocks count */
 	__le16	bg_free_inodes_count;	/* Free inodes count */
@@ -223,6 +230,7 @@ struct ext2_group_desc
 #define	EXT2_IND_BLOCK			EXT2_NDIR_BLOCKS
 #define	EXT2_DIND_BLOCK			(EXT2_IND_BLOCK + 1)
 #define	EXT2_TIND_BLOCK			(EXT2_DIND_BLOCK + 1)
+/* == 15 */
 #define	EXT2_N_BLOCKS			(EXT2_TIND_BLOCK + 1)
 
 /*
@@ -299,16 +307,27 @@ static inline __u32 ext2_mask_flags(umode_t mode, __u32 flags)
 /*
  * Structure of an inode on the disk
  */
+/* 128B */
 struct ext2_inode {
 	__le16	i_mode;		/* File mode */
 	__le16	i_uid;		/* Low 16 bits of Owner Uid */
+	/*
+	 * 对应文件的有效长度。包含文件 holes(如果有)。
+	 * 32 位，理论上 file 的长度最大是 4G ，但其实上最高位未使用，最大长度为 2G 。
+	 * ext2 通过借用 i_dir_acl 也可以支持 64 位，因为普通文件不使用 i_dir_acl
+	 */
 	__le32	i_size;		/* Size in bytes */
 	__le32	i_atime;	/* Access time */
 	__le32	i_ctime;	/* Creation time */
 	__le32	i_mtime;	/* Modification time */
 	__le32	i_dtime;	/* Deletion Time */
 	__le16	i_gid;		/* Low 16 bits of Group Id */
+	/* 硬链接个数 */
 	__le16	i_links_count;	/* Links count */
+	/*
+	 * 该 inode 占几个 block ，注意这个 block 的单位是 512B 。
+	 * 与 i_size 没什么关系。特别是有 holes ， i_size 会大于 i_blocks*512
+	 */
 	__le32	i_blocks;	/* Blocks count */
 	__le32	i_flags;	/* File flags */
 	union {
@@ -322,8 +341,21 @@ struct ext2_inode {
 			__le32  m_i_reserved1;
 		} masix1;
 	} osd1;				/* OS dependent 1 */
+	/*
+	 * 对于非符号链接的文件时，指向数据块号。
+	 * 对于符号链接的文件时，如果指向的文件名字小于 60B 时，i_block 保存文件名字
+	 * 即可，无需 data block ，否则需要一个 data block 。
+	 */
 	__le32	i_block[EXT2_N_BLOCKS];/* Pointers to blocks */
 	__le32	i_generation;	/* File version (for NFS) */
+	/*
+	 * access control list 。指向一个包含扩展属性的数据块。为什么要有这个？
+	 * 因为开始设计 ext2 时，一个 inode 结构是 128B ，这个大小不能随便扩大，扩大
+	 * 会不仅会引入兼容性问题而且也浪费空间。
+	 *
+	 * 因为是指向一个包含扩展属性的数据块，所以拥有相同的扩展属性的不同 inode 可
+	 * 能指向同一个数据块，从而达到共享。
+	 */
 	__le32	i_file_acl;	/* File ACL */
 	__le32	i_dir_acl;	/* Directory ACL */
 	__le32	i_faddr;	/* Fragment address */
@@ -414,6 +446,7 @@ struct ext2_inode {
 /*
  * Structure of the super block
  */
+/* disk 上存储的 sb 格式 */
 struct ext2_super_block {
 	__le32	s_inodes_count;		/* Inodes count */
 	__le32	s_blocks_count;		/* Blocks count */
@@ -422,22 +455,48 @@ struct ext2_super_block {
 	__le32	s_free_inodes_count;	/* Free inodes count */
 	__le32	s_first_data_block;	/* First Data Block */
 	__le32	s_log_block_size;	/* Block size */
+	/* == s_log_block_size ，说明 block fragmentation 未实现 */
 	__le32	s_log_frag_size;	/* Fragment size */
 	__le32	s_blocks_per_group;	/* # Blocks per group */
 	__le32	s_frags_per_group;	/* # Fragments per group */
 	__le32	s_inodes_per_group;	/* # Inodes per group */
 	__le32	s_mtime;		/* Mount time */
 	__le32	s_wtime;		/* Write time */
+	/*
+	 * 下面两个成员用于开机阶段自动触发 e2fsck 。触发条件是 mount 次数大于预定的
+	 * mount 次数。
+	 * 可以和 时间间隔 的 check 同时使用。
+	 *
+	 * The consistency check(e2fsck) is also enforced at boot time if the
+	 * filesystem has not been cleanly unmounted (for instance, after a system
+	 * crash) or when the kernel discovers some errors in it
+	 */
 	__le16	s_mnt_count;		/* Mount count */
 	__le16	s_max_mnt_count;	/* Maximal mount count */
 	__le16	s_magic;		/* Magic signature */
+	/*
+	 * 0 : the filesystem is mounted or was not cleanly unmounted
+	 * 1 : the filesystem was cleanly unmounted
+	 * 2 : the filesystem contains errors
+	 */
 	__le16	s_state;		/* File system state */
 	__le16	s_errors;		/* Behaviour when detecting errors */
 	__le16	s_minor_rev_level; 	/* minor revision level */
+	/*
+	 * 下面两个成员用于开机阶段自动触发 e2fsck 。触发条件是距离上次 check 的时间
+	 * 间隔大于预定间隔。
+	 * 可以和 mount 次数 的 check 同时使用。
+	 */
 	__le32	s_lastcheck;		/* time of last check */
 	__le32	s_checkinterval;	/* max. time between checks */
 	__le32	s_creator_os;		/* OS */
 	__le32	s_rev_level;		/* Revision level */
+	/*
+	 * Some disk blocks are reserved to the superuser (or to some other user or
+	 * group of users selected by the s_def_resuid and s_def_resgid fields).
+	 * These blocks allow the system administrator to continue to use the
+	 * filesystem even when no more free blocks are available for normal users.
+	 */
 	__le16	s_def_resuid;		/* Default uid for reserved blocks */
 	__le16	s_def_resgid;		/* Default gid for reserved blocks */
 	/*
@@ -595,10 +654,18 @@ struct ext2_dir_entry {
  * bigger than 255 chars, it's safe to reclaim the extra byte for the
  * file_type field.
  */
+/* 为了提高访问效率， dentry 是 4 字节对齐 */
 struct ext2_dir_entry_2 {
 	__le32	inode;			/* Inode number */
+	/*
+	 * 有两重含义：
+	 *   1.表示当前 ext2_dir_entry_2 的长度，是 4 的整数倍。
+	 *   2.通过当前 ext2_dir_entry_2 的起始地址 + rec_len 可以得到下一个有效
+	 *     ext2_dir_entry_2 的起始地址
+	 */
 	__le16	rec_len;		/* Directory entry length */
 	__u8	name_len;		/* Name length */
+	/* 如 EXT2_FT_REG_FILE */
 	__u8	file_type;
 	char	name[];			/* File name, up to EXT2_NAME_LEN */
 };
@@ -611,10 +678,18 @@ enum {
 	EXT2_FT_UNKNOWN		= 0,
 	EXT2_FT_REG_FILE	= 1,
 	EXT2_FT_DIR		= 2,
+	/* 无需 data block */
 	EXT2_FT_CHRDEV		= 3,
+	/* 无需 data block */
 	EXT2_FT_BLKDEV		= 4,
+	/* 无需 data block */
 	EXT2_FT_FIFO		= 5,
+	/* 无需 data block */
 	EXT2_FT_SOCK		= 6,
+	/*
+	 * 如果指向的文件名字小于 60B 时，直接使用 ext2_inode.i_block 保存文件名字即
+	 * 可，无需 data block ，否则需要一个 data block
+	 */
 	EXT2_FT_SYMLINK		= 7,
 	EXT2_FT_MAX
 };

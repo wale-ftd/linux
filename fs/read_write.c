@@ -412,6 +412,7 @@ static ssize_t new_sync_read(struct file *filp, char __user *buf, size_t len, lo
 ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
 		   loff_t *pos)
 {
+	/* 调用具体文件系统的读函数 */
 	if (file->f_op->read)
 		return file->f_op->read(file, buf, count, pos);
 	else if (file->f_op->read_iter)
@@ -451,6 +452,7 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 			count =  MAX_RW_COUNT;
 		ret = __vfs_read(file, buf, count, pos);
 		if (ret > 0) {
+			/* 通告文件被访问事件 */
 			fsnotify_access(file);
 			add_rchar(current, ret);
 		}
@@ -574,9 +576,11 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 	ssize_t ret = -EBADF;
 
 	if (f.file) {
+		/* 从文件的打开实例读取文件的当前偏移 */
 		loff_t pos = file_pos_read(f.file);
 		ret = vfs_read(f.file, buf, count, &pos);
 		if (ret >= 0)
+			/* 更新文件的当前偏移 */
 			file_pos_write(f.file, pos);
 		fdput_pos(f);
 	}
@@ -604,6 +608,17 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 	return ret;
 }
 
+/*
+ * 进程写文件的方式有 3 种。
+ *   1.调用内核提供的写文件的系统调用。
+ *   2.调用 glibc 库封装的写文件的标准 I/O 流函数。
+ *   3.创建基于文件的内存映射，把文件的一个区间映射到进程的虚拟地址空间，然后直
+ *     接写内存。
+ * 第 2 种方式在用户空间创建了缓冲区，能够减少系统调用的次数，提高性能。第 3 种
+ * 方式可以避免系统调用，性能最高。
+ *
+ * 从文件的当前偏移写文件，调用进程把要写入的数据存放在一个缓冲区
+ */
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
 {
@@ -656,6 +671,7 @@ ssize_t ksys_pwrite64(unsigned int fd, const char __user *buf,
 	return ret;
 }
 
+/* 从指定偏移开始写文件 */
 SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
 			 size_t, count, loff_t, pos)
 {
@@ -1103,6 +1119,7 @@ SYSCALL_DEFINE3(readv, unsigned long, fd, const struct iovec __user *, vec,
 	return do_readv(fd, vec, vlen, 0);
 }
 
+/* 从文件的当前偏移写文件，调用进程把要写入的数据存放在多个分散的缓冲区 */
 SYSCALL_DEFINE3(writev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
@@ -1129,6 +1146,7 @@ SYSCALL_DEFINE6(preadv2, unsigned long, fd, const struct iovec __user *, vec,
 	return do_preadv(fd, vec, vlen, pos, flags);
 }
 
+/* 从指定偏移开始写文件，调用进程把要写入的数据存放在多个分散的缓冲区 */
 SYSCALL_DEFINE5(pwritev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen, unsigned long, pos_l, unsigned long, pos_h)
 {

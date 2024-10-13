@@ -62,6 +62,11 @@ struct ext4_extent_tail {
  */
 struct ext4_extent {
 	__le32	ee_block;	/* first logical block extent covers */
+	/*
+	 * bit[15]用于在预分配特性中用来标识该 extent 是否被初始化过。
+	 * bit[14:0]表示块数。
+	 * 见 ext4_ext_is_unwritten
+	 */
 	__le16	ee_len;		/* number of blocks covered by extent */
 	__le16	ee_start_hi;	/* high 16 bits of physical block */
 	__le32	ee_start_lo;	/* low 32 bits of physical block */
