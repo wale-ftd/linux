@@ -1115,6 +1115,7 @@ static int __init gic_init_bases(void __iomem *dist_base,
 		gic_irqs = 1020;
 	gic_data.irq_nr = gic_irqs;
 
+	/* irq_chip will be used by gic_irq_domian_ops */
 	gic_data.domain = irq_domain_create_tree(handle, &gic_irq_domain_ops,
 						 &gic_data);
 	irq_domain_update_bus_token(gic_data.domain, DOMAIN_BUS_WIRED);
@@ -1137,6 +1138,7 @@ static int __init gic_init_bases(void __iomem *dist_base,
 			pr_err("Failed to initialize MBIs\n");
 	}
 
+	/* set handle_arch_irq */
 	set_handle_irq(gic_handle_irq);
 
 	gic_update_vlpi_properties();

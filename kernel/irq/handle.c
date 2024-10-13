@@ -19,7 +19,7 @@
 #include "internals.h"
 
 #ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
-/* == gic_handle_irq() */
+/* == gic_handle_irq(), used by arch/arm64/kernel/entry.S */
 void (*handle_arch_irq)(struct pt_regs *) __ro_after_init;
 #endif
 

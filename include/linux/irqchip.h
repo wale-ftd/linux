@@ -24,6 +24,13 @@
  * @compstr: compatible string of the irqchip driver
  * @fn: initialization function
  */
+/*
+ * IRQCHIP_DECLARE(gic_v3, "arm,gic-v3", gic_of_init);
+ * static const struct of_device_id __of_table_gic_v3
+ *   __attribute__((unused))
+ *     = { .compatible = "arm,gic-v3",
+ *         .data = gic_of_init }
+ */
 #define IRQCHIP_DECLARE(name, compat, fn) OF_DECLARE_2(irqchip, name, compat, fn)
 
 /*

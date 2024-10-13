@@ -99,7 +99,7 @@ enum irq_domain_bus_token {
  * whatever internal data structures management is required. It also needs
  * to setup the irq_desc when returning from map().
  */
-/* 如 gic_irq_domain_hierarchy_ops */
+/* 如 gic_irq_domain_hierarchy_ops(gic_v2)/gic_irq_domain_ops(gic_v3)/plic_irqdomain_ops */
 struct irq_domain_ops {
 	int (*match)(struct irq_domain *d, struct device_node *node,
 		     enum irq_domain_bus_token bus_token);

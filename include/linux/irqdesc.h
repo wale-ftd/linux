@@ -52,6 +52,7 @@ struct pt_regs;
  * @debugfs_file:	dentry for the debugfs file
  * @name:		flow handler name for /proc/interrupts output
  */
+/* managed by radix tree(irq_desc_tree) */
 struct irq_desc {
 	struct irq_common_data	irq_common_data;
 	struct irq_data		irq_data;
