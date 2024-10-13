@@ -32,7 +32,9 @@ typedef u64 pgdval_t;
  */
 /* 页表项的数据结构 */
 typedef struct { pteval_t pte; } pte_t;
+/* pte_t -> u64 */
 #define pte_val(x)	((x).pte)
+/* u64 -> pte_t */
 #define __pte(x)	((pte_t) { (x) } )
 
 #if CONFIG_PGTABLE_LEVELS > 2

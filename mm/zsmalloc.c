@@ -115,6 +115,7 @@
  * have room for two bit at least.
  */
 #define OBJ_ALLOCATED_TAG 1
+/* 目前用于 OBJ_ALLOCATED_TAG */
 #define OBJ_TAG_BITS 1
 #define OBJ_INDEX_BITS	(BITS_PER_LONG - _PFN_BITS - OBJ_TAG_BITS)
 #define OBJ_INDEX_MASK	((_AC(1, UL) << OBJ_INDEX_BITS) - 1)
@@ -195,6 +196,7 @@ static struct vfsmount *zsmalloc_mnt;
 static const int fullness_threshold_frac = 4;
 static size_t huge_class_size;
 
+/* 由 zs_pool 管理 */
 struct size_class {
 	spinlock_t lock;
 	struct list_head fullness_list[NR_ZS_FULLNESS];
@@ -251,6 +253,7 @@ struct zs_pool {
 	const char *name;
 
 	struct size_class *size_class[ZS_SIZE_CLASSES];
+	/* handle 对应的地址里会存放 obj ，见 location_to_obj()。 obj 里也会存放 handle */
 	struct kmem_cache *handle_cachep;
 	struct kmem_cache *zspage_cachep;
 
@@ -270,6 +273,13 @@ struct zs_pool {
 #endif
 };
 
+/*
+ * 用于组织一个个 page 。每一个 obj 开始的 8 个字节用于存放 next free 或 handle ，
+ * 见 link_free 。如果存放的是 handle ，那 handle 对应的地址里也会存放 obj ，见
+ * location_to_obj()
+ *
+ * 所有 page 的 page.private 指向 zspage
+ */
 struct zspage {
 	struct {
 		unsigned int fullness:FULLNESS_BITS;
@@ -283,8 +293,11 @@ struct zspage {
      * inuse 的值越接近 class->objs_per_zspage 越好
      */
 	unsigned int inuse;
+	/* 第一个空闲 obj 的编号。从 0 开始 */
 	unsigned int freeobj;
+	/* zspage 的第一个 page ，其它 page 通过 page.freelist 链接组成一个单链表 */
 	struct page *first_page;
+	/* 链接入 size_class.fullness_list */
 	struct list_head list; /* fullness list */
 #ifdef CONFIG_COMPACTION
 	rwlock_t lock;

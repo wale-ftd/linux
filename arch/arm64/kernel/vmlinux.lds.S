@@ -147,10 +147,10 @@ SECTIONS
 
 	. = ALIGN(PAGE_SIZE);
 	idmap_pg_dir = .;
-    /*
-     * == 0x3000 ， 3 个连续 4KB 的物理页面，分别对应 PGD/PUD/PMD ，每一级
-     * 页表占据一个页面。注意，这里要建立的是 2MB 大小的块映射
-     */
+	/*
+	 * == 0x3000 ， 3 个连续 4KB 的物理页面，分别对应 PGD/PUD/PMD ，每一级
+	 * 页表占据一个页面。注意，这里要建立的是 2MB 大小的 section 映射
+	 */
 	. += IDMAP_DIR_SIZE;
 
 /* 有定义。即为 ARM 的 KPTI 功能 */
@@ -252,7 +252,7 @@ SECTIONS
 
 	. = ALIGN(PAGE_SIZE);
 	init_pg_dir = .;
-    /* == 0x5000 */
+	/* == 0x5000 */
 	. += INIT_DIR_SIZE;
 	init_pg_end = .;
 

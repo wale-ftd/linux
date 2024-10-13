@@ -154,6 +154,10 @@ struct pt_regs {
 			/* x0~x30 共 31 个通过寄存器。其中 x29 也称 FP ， x30 也称 LR 。 */
 			u64 regs[31];
 			u64 sp;
+			/*
+			 * 异常返回前，软件会将 pc 写入 elr_el1 里，执行 eret 时，硬件会自动
+			 * 将 elr_el1 设置到 pc 寄存器
+			 */
 			u64 pc;
 			u64 pstate;
 		};

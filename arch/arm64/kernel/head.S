@@ -212,12 +212,25 @@ ENDPROC(preserve_boot_args)
  * Returns:	rtbl
  */
     /* 设置页表项的内容 */
+	/*
+	 * x0 : 0x41c0c000(__pa(idmap_pg_dir))
+	 * x1 = idmap_pg_dir + 4096
+	 * x10 = 0
+	 * x11 = 0
+	 * populate_entries      x0,    x1,   x10,    x11,     3, 4096, x12
+	 */
 	.macro populate_entries, tbl, rtbl, index, eindex, flags, inc, tmp1
+	/* x12 = x1 */
 .Lpe\@:	phys_to_pte \tmp1, \rtbl
+	/* x12 = x12 | 3 */
 	orr	\tmp1, \tmp1, \flags	// tmp1 = table entry
+	/* [x0] = x12 ，即填充 pgd 表项 */
 	str	\tmp1, [\tbl, \index, lsl #3]
+	/* x1 = x1 + 4096 */
 	add	\rtbl, \rtbl, \inc	// rtbl = pa next level
+	/* x10 = 1 */
 	add	\index, \index, #1
+	/* x10 = 1 > x11 = 0 */
 	cmp	\index, \eindex
 	b.ls	.Lpe\@
 	.endm
@@ -241,21 +254,62 @@ ENDPROC(preserve_boot_args)
  * Returns:	istart, iend, count
  */
     /* 根据虚拟地址来计算虚拟地址 vstart 和 vend 在各自页表中对应的索引值 */
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x4 : 512 ， idmap_pg_dir 页表项个数
+	 * x13 = 0
+	 * compute_indices x3, x6, 39, x4, x10, x11, x13
+	 */
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x13 = 0
+	 * compute_indices x3, x6, 30, 512, x10, x11, x13
+	 */
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x13 = 0
+	 * compute_indices x3, x6, 21, 512, x10, x11, x13
+	 */
 	.macro compute_indices, vstart, vend, shift, ptrs, istart, iend, count
+	/* x11 = x6 >> 39 = 0 */
+	/* x11 = x6 >> 30 = 1 */
+	/* x11 = x6 >> 21 = 524 */
 	lsr	\iend, \vend, \shift
+	/* x10 = 512 */
 	mov	\istart, \ptrs
+	/* x10 = 511 */
 	sub	\istart, \istart, #1
+	/* x11 = x11 & x10 = 0 */
+	/* x11 = x11 & x10 = 1 */
+	/* x11 = x11 & x10 = 12 */
 	and	\iend, \iend, \istart	// iend = (vend >> shift) & (ptrs - 1)
+	/* x10 = 512 */
 	mov	\istart, \ptrs
+	/* x10 = x10 * 0 = 0 */
 	mul	\istart, \istart, \count
+	/* x11 = x11 + x10 = 0 */
+	/* x11 = x11 + x10 = 1 */
+	/* x11 = x11 + x10 = 12 */
 	add	\iend, \iend, \istart	// iend += (count - 1) * ptrs
 					// our entries span multiple tables
 
+	/* x10 = x3 >> 39 = 0 */
+	/* x10 = x3 >> 30 = 1 */
+	/* x10 = x3 >> 21 = 524 */
 	lsr	\istart, \vstart, \shift
+	/* x13 = 512 */
 	mov	\count, \ptrs
+	/* x13 = 511 */
 	sub	\count, \count, #1
+	/* x10 = x10 & 511 = 0 */
+	/* x10 = x10 & 511 = 1 */
+	/* x10 = x10 & 511 = 12 */
 	and	\istart, \istart, \count
 
+	/* x13 = x11 - x10 = 0 */
 	sub	\count, \iend, \istart
 	.endm
 
@@ -276,13 +330,44 @@ ENDPROC(preserve_boot_args)
  * Preserves:	vstart, vend, flags
  * Corrupts:	tbl, rtbl, istart, iend, tmp, count, sv
  */
+/*
+ * 建立 idmap_pg_dir 页表
+ * x0 : 0x41c0c000(__pa(idmap_pg_dir))
+ * x1 任意给个寄存器即可
+ * x3 : 0x418f4000(__pa(__idmap_text_start))
+ * x6 : 0x418f46b8(__pa(__idmap_text_end))
+ * x7 : section 表项的值 SWAPPER_MM_MMUFLAGS
+ * x4 : 512 ， idmap_pg_dir 页表项个数
+ * map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
+ */
 	.macro map_memory, tbl, rtbl, vstart, vend, flags, phys, pgds, istart, iend, tmp, count, sv
+	/* x1 = x0 + 4096 -> pmd */
 	add \rtbl, \tbl, #PAGE_SIZE
+	/* x14 = x1 */
 	mov \sv, \rtbl
+	/* x13 = 0 */
 	mov \count, #0
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x4 : 512 ， idmap_pg_dir 页表项个数
+	 * x13 = 0
+	 * compute_indices x3, x6, 39, x4, x10, x11, x13
+	 * 返回： istart x10 = 0 , iend x11 = 0 , count x13 = 0
+	 */
 	compute_indices \vstart, \vend, #PGDIR_SHIFT, \pgds, \istart, \iend, \count
+	/*
+	 * x0 : idmap_pg_dir
+	 * x1 = idmap_pg_dir + 4096 -> pud
+	 * x10 = 0
+	 * x11 = 0
+	 * populate_entries x0, x1, x10, x11, 3, 4096, x12
+	 * 返回： 1. 设置 pgd[0] 表项 ； 2. x1 = idmap_pg_dir + 4096 + 4096 -> pmd
+	 */
 	populate_entries \tbl, \rtbl, \istart, \iend, #PMD_TYPE_TABLE, #PAGE_SIZE, \tmp
+	/* x0 = x14 = x1 + 4096 -> pud */
 	mov \tbl, \sv
+	/* x14 = x1 = idmap_pg_dir + 4096 + 4096 -> pmd */
 	mov \sv, \rtbl
 
 #if SWAPPER_PGTABLE_LEVELS > 3
@@ -292,14 +377,48 @@ ENDPROC(preserve_boot_args)
 	mov \sv, \rtbl
 #endif
 
+/* 走这里。因为 SWAPPER_PGTABLE_LEVELS == 3 */
 #if SWAPPER_PGTABLE_LEVELS > 2
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x13 = 0
+	 * compute_indices x3, x6, 30, 512, x10, x11, x13
+	 * 返回： istart x10 = 1 , iend x11 = 1 , count x13 = 0
+	 */
 	compute_indices \vstart, \vend, #SWAPPER_TABLE_SHIFT, #PTRS_PER_PMD, \istart, \iend, \count
+	/*
+	 * x0 : idmap_pg_dir + 4096 -> pud
+	 * x1 = idmap_pg_dir + 4096 + 4096 -> pmd
+	 * x10 = 1
+	 * x11 = 1
+	 * populate_entries x0, x1, x10, x11, 3, 4096, x12
+	 * 返回： 1. 设置 pud[1] 表项 ； 2. x1 = idmap_pg_dir + 3*4096 -> pt
+	 */
 	populate_entries \tbl, \rtbl, \istart, \iend, #PMD_TYPE_TABLE, #PAGE_SIZE, \tmp
+	/* x0 = idmap_pg_dir + 2*4096 -> pmd */
 	mov \tbl, \sv
 #endif
 
+	/*
+	 * x3 : 0x418f4000(__pa(__idmap_text_start))
+	 * x6 : 0x418f46b8(__pa(__idmap_text_end))
+	 * x13 = 0
+	 * compute_indices x3, x6, 21, 512, x10, x11, x13
+	 * 返回： istart x10 = 12 , iend x11 = 12 , count x13 = 0
+	 */
 	compute_indices \vstart, \vend, #SWAPPER_BLOCK_SHIFT, #PTRS_PER_PTE, \istart, \iend, \count
+	/* x13 = x3 & (~((1<<21)-1)) ， x13 为 x3 清除低 21 位的值 */
 	bic \count, \phys, #SWAPPER_BLOCK_SIZE - 1
+	/*
+	 * x0 : idmap_pg_dir + 2*4096 -> pmd
+	 * x13 = 0x41800000
+	 * x10 = 12
+	 * x11 = 12
+	 * x7 : section 表项的值 SWAPPER_MM_MMUFLAGS
+	 * populate_entries x0, x13, x10, x11, x7, 1<<21, x12
+	 * 返回： 1. 设置 pmd[12] 表项
+	 */
 	populate_entries \tbl, \count, \istart, \iend, \flags, #SWAPPER_BLOCK_SIZE, \tmp
 	.endm
 
@@ -366,6 +485,7 @@ __create_page_tables:
 	subs	x1, x1, #64
 	b.ne	1b
 
+	/* 建立 2MB 大小的 section 映射 */
 	mov	x7, SWAPPER_MM_MMUFLAGS
 
 	/*
@@ -378,6 +498,7 @@ __create_page_tables:
 	adrp	x0, idmap_pg_dir
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
 
+/* 未定义 */
 #ifdef CONFIG_ARM64_USER_VA_BITS_52
 	mrs_s	x6, SYS_ID_AA64MMFR2_EL1
 	and	x6, x6, #(0xf << ID_AA64MMFR2_LVA_SHIFT)
@@ -387,6 +508,7 @@ __create_page_tables:
 	mov	x5, #VA_BITS
 1:
 	adr_l	x6, vabits_user
+	/* vabits_user = VA_BITS = 48 */
 	str	x5, [x6]
 	dmb	sy
 	dc	ivac, x6		// Invalidate potentially stale cache line
@@ -404,8 +526,10 @@ __create_page_tables:
 	 * the physical address of __idmap_text_end.
 	 */
 	adrp	x5, __idmap_text_end
+	/* 如果 x5 = 0x418f4000 ，那么返回 x5 = 33 。如果 x5 = 1<<63 ，那么返回 0 */
 	clz	x5, x5
 	cmp	x5, TCR_T0SZ(VA_BITS)	// default T0SZ small enough?
+	/* 33 > (64-48)，跳到 1f */
 	b.ge	1f			// .. then skip VA range extension
 
 	adr_l	x6, idmap_t0sz
@@ -443,7 +567,15 @@ __create_page_tables:
 	mov	x5, x3				// __pa(__idmap_text_start)
 	adr_l	x6, __idmap_text_end		// __pa(__idmap_text_end)
 
-    /* 建立映射页表 */
+    /*
+     * 建立 idmap_pg_dir 页表
+     * x0 : idmap_pg_dir
+     * x1 任意给个寄存器即可
+     * x3 : 0x418f4000(__pa(__idmap_text_start))
+     * x6 : 0x418f46b8(__pa(__idmap_text_end))
+     * x7 : section 表项的值 0x711
+     * x4 : 512 ， idmap_pg_dir 页表项个数
+     */
 	map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
 
 	/*
@@ -458,6 +590,16 @@ __create_page_tables:
 	sub	x6, x6, x3			// _end - _text
 	add	x6, x6, x5			// runtime __va(_end)
 
+    /*
+     * 建立 init_pg_dir 页表
+     * x0 : init_pg_dir
+     * x1 任意给个寄存器即可
+     * x5 : 0xffff000010080000
+     * x6 : 0xffff000012261000
+     * x7 : section 表项的值 0x711
+     * x3 : 0x40080000
+     * x4 : 512 ， init_pg_dir 页表项个数
+     */
 	map_memory x0, x1, x5, x6, x7, x3, x4, x10, x11, x12, x13, x14
 
 	/*

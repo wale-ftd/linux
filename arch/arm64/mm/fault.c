@@ -496,14 +496,17 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 
     /* 处理比较少见的特殊情况 */
 	if (is_ttbr0_addr(addr) && is_el1_permission_fault(addr, esr, regs)) {
-	/* 内核空间访问用户空间时发生了权限错误 */
+	/* 内核空间访问用户空间地址时发生了权限错误 */
 		/* regs->orig_addr_limit may be 0 if we entered from EL0 */
 		if (regs->orig_addr_limit == KERNEL_DS)
 			die_kernel_fault("access to user memory with fs=KERNEL_DS",
 					 addr, esr, regs);
 
 		if (is_el1_instruction_abort(esr))
-		/* 内核空间访问用户空间的指令时发生错误 */
+		/*
+		 * 内核空间访问用户空间的指令时发生错误。因为异常表只处理访问用户空间的
+		 * 数据，不处理指令
+		 */
 			die_kernel_fault("execution of user memory",
 					 addr, esr, regs);
 

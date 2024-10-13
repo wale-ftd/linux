@@ -17,6 +17,11 @@
 
 struct exception_table_entry
 {
+	/*
+	 * 注意：这两个是相对值。
+	 * insn = 异常指令虚拟地址 - 字段 insn 的虚拟地址
+	 * fixup = 异常修正指令虚拟地址 - 字段 fixup 的虚拟地址
+	 */
 	int insn, fixup;
 };
 

@@ -622,6 +622,12 @@ fail_nomem:
 
 static inline int mm_alloc_pgd(struct mm_struct *mm)
 {
+	/*
+	 * pgd_alloc()是架构相关的函数。
+	 * 对于 arm64 分配一个页即可，无需 copy kernel 页表。
+	 * 对于 riscv 除了分配一个页，还需 copy kernel 页表，因为 riscv 只有一个页表
+	 * 基地址寄存器。
+	 */
 	mm->pgd = pgd_alloc(mm);
 	if (unlikely(!mm->pgd))
 		return -ENOMEM;
@@ -1325,6 +1331,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
 
 	memcpy(mm, oldmm, sizeof(*mm));
 
+	/* 分配 pgd */
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 

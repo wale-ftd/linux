@@ -38,7 +38,7 @@
  * VMEMMAP_SIZE - allows the whole linear region to be covered by
  *                a struct page array
  */
-/* 1 << 35+6 = 2048GB */
+/* 1 << 35+6 = 2048GB = 0x20000000000 */
 #define VMEMMAP_SIZE (UL(1) << (VA_BITS - PAGE_SHIFT - 1 + STRUCT_PAGE_MAX_SHIFT))
 
 /*
@@ -61,18 +61,44 @@
 	(UL(1) << (VA_BITS - 1)) + 1)
 /* 表示内核映像文件映射到内核空间的起始虚拟地址，其值为 0xffff000010000000 */
 #define KIMAGE_VADDR		(MODULES_END)
+/* == VA_START */
 #define BPF_JIT_REGION_START	(VA_START + KASAN_SHADOW_SIZE)
+/* == 0x8000000 */
 #define BPF_JIT_REGION_SIZE	(SZ_128M)
+/* 0xffff000000000000 + 0x8000000 = 0xffff000008000000 */
 #define BPF_JIT_REGION_END	(BPF_JIT_REGION_START + BPF_JIT_REGION_SIZE)
 /* == 0xffff000010000000 */
 #define MODULES_END		(MODULES_VADDR + MODULES_VSIZE)
+/* == 0xffff000008000000 , see mem_init() */
 #define MODULES_VADDR		(BPF_JIT_REGION_END)
+/* == 0x8000000 */
 #define MODULES_VSIZE		(SZ_128M)
+/* == 0xffff800000000000 - 0x20000000000 = 0xffff7e0000000000 */
 #define VMEMMAP_START		(PAGE_OFFSET - VMEMMAP_SIZE)
+/* == 0xffff7e0000000000 - 0x200000 = 0xffff7dffffe00000 */
 #define PCI_IO_END		(VMEMMAP_START - SZ_2M)
+/* == 0xffff7dffffe00000 - 0x1000000 = 0xffff7dfffee00000 */
 #define PCI_IO_START		(PCI_IO_END - PCI_IO_SIZE)
-/* == 0xffff7dfffec00000 */
+/* == 0xffff7dfffee00000 - 0x200000 = 0xffff7dfffec00000 */
 #define FIXADDR_TOP		(PCI_IO_START - SZ_2M)
+
+/*
+ * Virtual kernel memory layout:
+ *  bpf jit : 0xffff000000000000 - 0xffff000080000000   (   128 MB)
+ *  modules : 0xffff000008000000 - 0xffff000010000000   (   128 MB)
+ *  vmalloc : 0xffff000010000000 - 0xffff7dffbfff0000   (129022 GB)
+ *    .text : 0xffff000010080000 - 0xffff000011910000   ( 25152 KB)
+ *    .init : 0xffff000011c30000 - 0xffff0000120c0000   (  4672 KB)
+ *  .rodata : 0xffff000011910000 - 0xffff000011c19000   (  3108 KB)
+ *    .data : 0xffff0000120c0000 - 0xffff0000121d6200   (  1113 KB)
+ *     .bss : 0xffff0000121d6200 - 0xffff00001226bd70   (   599 KB)
+ *  fixed   : 0xffff7dfffe7f9000 - 0xffff7dfffec00000   (  4124 KB)
+ *  PCI I/O : 0xffff7dfffee00000 - 0xffff7dffffe00000   (    16 MB)
+ *  vmemmap : 0xffff7e0000000000 - 0xffff800000000000   (  2048 GB maximum)
+ *            0xffff7e0000000000 - 0xffff7e0001000000   (    16 MB actual)
+ *  memory  : 0xffff800000000000 - 0xffffffffffffffff   (   128 TB maximum)
+ *          : 0xffff800000000000 - 0xffff800040000000   (  1024 MB actual)
+ */
 
 #define KERNEL_START      _text
 #define KERNEL_END        _end

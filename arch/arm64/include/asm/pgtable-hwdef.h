@@ -49,7 +49,13 @@
  * Rearranging it a bit we get :
  *   (4 - n) * (PAGE_SHIFT - 3) + 3
  */
-/* == 21 */
+/*
+ * n : ret
+ * 0 : 39
+ * 1 : 30
+ * 2 : 21
+ * 3 : 12
+ */
 #define ARM64_HW_PGTABLE_LEVEL_SHIFT(n)	((PAGE_SHIFT - 3) * (4 - (n)) + 3)
 
 /* == 512 */

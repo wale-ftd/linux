@@ -2073,6 +2073,7 @@ static ssize_t generic_file_buffered_read(struct kiocb *iocb,
 	last_index = (*ppos + iter->count + PAGE_SIZE-1) >> PAGE_SHIFT;
 	offset = *ppos & ~PAGE_MASK;
 
+	/* 处理针对请求的每一页 */
 	for (;;) {
 		struct page *page;
 		pgoff_t end_index;
@@ -2086,6 +2087,7 @@ find_page:
 			goto out;
 		}
 
+		/* 在页缓存中查找页 */
 		page = find_get_page(mapping, index);
 		if (!page) {
 			if (iocb->ki_flags & IOCB_NOWAIT)
@@ -2093,12 +2095,18 @@ find_page:
 			page_cache_sync_readahead(mapping,
 					ra, filp,
 					index, last_index - index);
+			/* 为什么还要执行一次？ */
 			page = find_get_page(mapping, index);
 			if (unlikely(page == NULL))
 				goto no_cached_page;
 		}
+		/*
+		 * 如果为页设置了预读标志，说明这一页是读取前一页的时候预读到内存的，那
+		 * 么调用函数 page_cache_async_readahead 继续预读后面的页，使用异步模式，
+		 * 不等待读操作结束。即上一次预读的页，现在被真正读了，会进行更激进的异
+		 * 步预读
+		 */
 		if (PageReadahead(page)) {
-		/* 上一次预读的页，现在被真正读了，会进行更激进的异步预读 */
 			page_cache_async_readahead(mapping,
 					ra, filp, page,
 					index, last_index - index);
@@ -2176,6 +2184,7 @@ page_ok:
 		 * only mark it as accessed the first time.
 		 */
 		if (prev_index != index || offset != prev_offset)
+			/* 标记页被访问过 */
 			mark_page_accessed(page);
 		prev_index = index;
 
@@ -2184,6 +2193,7 @@ page_ok:
 		 * now we can copy it to user space...
 		 */
 
+		/* 把数据从页缓存复制到用户缓冲区 */
 		ret = copy_page_to_iter(page, offset, nr, iter);
 		offset += ret;
 		index += offset >> PAGE_SHIFT;
@@ -2287,6 +2297,7 @@ no_cached_page:
 			}
 			goto out;
 		}
+		/* 从存储设备读取页到内存 */
 		goto readpage;
 	}
 

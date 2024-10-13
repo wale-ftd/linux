@@ -182,10 +182,10 @@ static u64 new_context(struct mm_struct *mm)
 	u64 asid = atomic64_read(&mm->context.id);
 	u64 generation = atomic64_read(&asid_generation);
 
-    /*
-     * 刚创建进程时， mm->context.id 值初始化为 0 。如果这时 ASID 不为 0，说明该
-     * 进程已经分配过 ASID
-     */
+	/*
+	 * 刚创建进程时， mm->context.id 值初始化为 0 。如果这时 ASID 不为 0，说明该
+	 * 进程已经分配过 ASID
+	 */
 	if (asid != 0) {
 		u64 newasid = generation | (asid & ~ASID_MASK);
 
@@ -193,10 +193,10 @@ static u64 new_context(struct mm_struct *mm)
 		 * If our current ASID was active during a rollover, we
 		 * can continue to use it and this was just a false alarm.
 		 */
-        /*
-         * 如果原来的 ASID 还有效(通过 check_update_reserved_asid()判断)，只需要
-         * 更新 generation 即可组成一个新的软件 ASID 。
-         */
+		/*
+		 * 如果原来的 ASID 还有效(通过 check_update_reserved_asid()判断)，只需要
+		 * 更新 generation 即可组成一个新的软件 ASID 。
+		 */
 		if (check_update_reserved_asid(asid, newasid))
 			return newasid;
 
@@ -224,11 +224,11 @@ static u64 new_context(struct mm_struct *mm)
 	if (asid != NUM_USER_ASIDS)
 		goto set_asid;
 
-    /* 如果 ASID 已经分配完，那么提升 generation 值 */
+	/* 如果 ASID 已经分配完，那么提升 generation 值 */
 	/* We're out of ASIDs, so increment the global generation count */
 	generation = atomic64_add_return_relaxed(ASID_FIRST_VERSION,
 						 &asid_generation);
-    /* 重新初始化 ASID 分配状态，如把 asid_map 清零、刷新所有 CPU 上的 TLB */
+	/* 重新初始化 ASID 分配状态，如把 asid_map 清零、刷新所有 CPU 上的 TLB */
 	flush_context();
 
 	/* We have more ASIDs than CPUs, so this will always succeed */
@@ -346,7 +346,7 @@ switch_mm_fastpath:
 	 * 时设置寄存器 TTBR0_EL1 。
 	 */
 	if (!system_uses_ttbr0_pan())
-        /* 进行页表的切换 */
+        /* 切换 mm 。主要切换 pgd 和 asid */
 		cpu_switch_mm(mm->pgd, mm);
 }
 

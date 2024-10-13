@@ -670,7 +670,7 @@ static inline phys_addr_t pgd_page_paddr(pgd_t pgd)
 /* 在内核的 PGD 页表中，根据虚拟地址来查找对应的页表项的地址(pgd_t *) */
 #define pgd_offset_k(addr)	pgd_offset(&init_mm, addr)
 
-/* addr 是物理地址 */
+/* 将 addr 物理地址映射到固定虚拟地址上 */
 #define pgd_set_fixmap(addr)	((pgd_t *)set_fixmap_offset(FIX_PGD, addr))
 #define pgd_clear_fixmap()	clear_fixmap(FIX_PGD)
 

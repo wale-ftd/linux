@@ -47,6 +47,7 @@ enum fixed_addresses {
 	 */
 #define FIX_FDT_SIZE		(MAX_FDT_SIZE + SZ_2M)
 	FIX_FDT_END,
+	/* == 1 + 4M>>12 - 1 = 1024 */
 	FIX_FDT = FIX_FDT_END + FIX_FDT_SIZE / PAGE_SIZE - 1,
 
 	FIX_EARLYCON_MEM_BASE,
@@ -63,6 +64,7 @@ enum fixed_addresses {
 	FIX_ENTRY_TRAMP_TEXT,
 #define TRAMP_VALIAS		(__fix_to_virt(FIX_ENTRY_TRAMP_TEXT))
 #endif /* CONFIG_UNMAP_KERNEL_AT_EL0 */
+	/* == 1031 */
 	__end_of_permanent_fixed_addresses,
 
 	/*
@@ -88,7 +90,9 @@ enum fixed_addresses {
 	__end_of_fixed_addresses
 };
 
+/* == 0x407000 */
 #define FIXADDR_SIZE	(__end_of_permanent_fixed_addresses << PAGE_SHIFT)
+/* == 0xffff7dfffec00000 - 0x407000 = 0xffff7dfffe7f9000 , see mem_init() */
 #define FIXADDR_START	(FIXADDR_TOP - FIXADDR_SIZE)
 
 #define FIXMAP_PAGE_IO     __pgprot(PROT_DEVICE_nGnRE)

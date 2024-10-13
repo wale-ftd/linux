@@ -168,6 +168,7 @@ struct page {
 			 * 机的
 			 *
 			 * 用于 slub/slob 时，指向第一个空闲对象
+			 * 用于 zspage 时，指向下一个 page
 			 */
 			void *freelist;		/* first free object */
 			union {
@@ -280,7 +281,10 @@ struct page {
 		 *   2.下一次分配的对象是 page->s_mem + page->freelist[3]
 		 */
 		unsigned int active;		/* SLAB */
-		/* 表示空闲单元的数量 */
+		/*
+		 * 用于 slob 时，表示空闲单元的数量
+		 * 用于 zspage 时，表示当前页面的第一个 obj 是 zspage 的第几个 obj
+		 */
 		int units;			/* SLOB */
 	};
 

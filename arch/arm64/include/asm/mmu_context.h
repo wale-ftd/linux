@@ -261,6 +261,7 @@ static inline void
 switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	  struct task_struct *tsk)
 {
+	/* 不同进程才切换。同一个进程的线程之间切换也会跑到这里，但此时 mm 无需切换 */
 	if (prev != next)
 		__switch_mm(next);
 

@@ -642,6 +642,7 @@ static void __init map_kernel(pgd_t *pgdp)
 	map_kernel_segment(pgdp, _data, _end, PAGE_KERNEL, &vmlinux_data, 0, 0);
 
 	if (!READ_ONCE(pgd_val(*pgd_offset_raw(pgdp, FIXADDR_START)))) {
+	/* 把当前页表(目前还是 init_pg_dir)中的 fix map 同步到 swapper_pg_dir 中 */
 		/*
 		 * The fixmap falls in a separate pgd to the kernel, and doesn't
 		 * live in the carveout for the swapper_pg_dir. We can simply
@@ -676,13 +677,16 @@ static void __init map_kernel(pgd_t *pgdp)
 void __init paging_init(void)
 {
     /*
+     * 访问 swapper_pg_dir ，需要先获取其虚拟地址。因为开启 MMU 后，访问内存都是
+     * 通过虚拟地址进行的。
+     *
      * 在内存线性映射完成之前，不能直接通过 __pa()这个宏直接从线性映射地址转换到
      * 物理地址。
      *
      * 看下面是如何获取 swapper_pg_dir 对应的物理地址的。swapper_pg_dir 是一个链
      * 接地址(即虚拟地址)，因为在内核启动的汇编代码中会做一次简单的块映射。
      * __pa_symbol()宏把内核符号的虚拟地址转换为物理地址。 pgd_set_fixmap()函数
-     * 做一个固定映射，把 swapper_pg_dir 页表重新映射到固定映射区域。
+     * 做一个固定映射，把 swapper_pg_dir 页表重新映射到固定虚拟地址映射区域。
      */
 	pgd_t *pgdp = pgd_set_fixmap(__pa_symbol(swapper_pg_dir));
 
@@ -700,9 +704,12 @@ void __init paging_init(void)
     /* 取消前面做的固定区域映射 */
 	pgd_clear_fixmap();
 
+	/* 页表切换成 swapper_pg_dir */
 	cpu_replace_ttbr1(lm_alias(swapper_pg_dir));
+	/* init_mm.pgd 从 init_pg_dir 修改成 swapper_pg_dir */
 	init_mm.pgd = swapper_pg_dir;
 
+	/* 释放 init_pg_dir 占用的内存 */
 	memblock_free(__pa_symbol(init_pg_dir),
 		      __pa_symbol(init_pg_end) - __pa_symbol(init_pg_dir));
 

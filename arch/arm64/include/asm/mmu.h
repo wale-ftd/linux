@@ -28,10 +28,11 @@
 #ifndef __ASSEMBLY__
 
 typedef struct {
-    /*
-     * 软件 asid 。其中[63:asid_bits]存放软件 asid_generation ，
-     * [asid_bits:0]存放硬件 ASID
-     */
+	/*
+	 * 软件 asid 。其中[63:asid_bits]存放软件 asid_generation ，
+	 * [asid_bits:0]存放硬件 ASID 。
+	 * 刚创建进程时，初始化为 0 。
+	 */
 	atomic64_t	id;
 	void		*vdso;
 	unsigned long	flags;
@@ -144,6 +145,7 @@ extern void *fixmap_remap_fdt(phys_addr_t dt_phys);
 extern void mark_linear_text_alias_ro(void);
 
 #define INIT_MM_CONTEXT(name)	\
+	/* arch/arm64/kernel/vmlinux.lds.S */
 	.pgd = init_pg_dir,
 
 #endif	/* !__ASSEMBLY__ */
