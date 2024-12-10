@@ -142,6 +142,7 @@ struct gendisk {
 	struct xarray part_tbl;
 	struct block_device *part0;
 
+	/* 如 md_fops */
 	const struct block_device_operations *fops;
 	struct request_queue *queue;
 	void *private_data;
@@ -385,6 +386,7 @@ struct request_queue {
 	struct rq_qos		*rq_qos;
 	struct mutex		rq_qos_mutex;
 
+	/* rq 操作函数集。如 scsi_mq_ops */
 	const struct blk_mq_ops	*mq_ops;
 
 	/* sw queues */
@@ -405,6 +407,7 @@ struct request_queue {
 	/*
 	 * various queue flags, see QUEUE_* below
 	 */
+	/* 如 QUEUE_FLAG_FUA */
 	unsigned long		queue_flags;
 	/*
 	 * Number of contexts that have called blk_set_pm_only(). If this

@@ -538,6 +538,7 @@ struct blk_mq_ops {
 	/**
 	 * @queue_rq: Queue a new request from block IO.
 	 */
+	/* 驱动处理请求 */
 	blk_status_t (*queue_rq)(struct blk_mq_hw_ctx *,
 				 const struct blk_mq_queue_data *);
 

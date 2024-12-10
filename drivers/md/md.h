@@ -45,9 +45,14 @@ struct serial_in_rdev {
 /*
  * MD's 'extended' device
  */
+/* md 设备成员磁盘的抽象 */
 struct md_rdev {
 	struct list_head same_set;	/* RAID devices within the same set */
 
+	/*
+	 * 成员磁盘的有效大小(MD 可用的大小)。
+	 * 成员磁盘的实际大小 = 有效大小 + 超块大小 + 非 64K 对齐空间
+	 */
 	sector_t sectors;		/* Device size (in 512bytes sectors) */
 	struct mddev *mddev;		/* RAID array if running */
 	int last_events;		/* IO event timestamp */
@@ -65,6 +70,16 @@ struct md_rdev {
 	__u64		sb_events;
 	sector_t	data_offset;	/* start of data in array */
 	sector_t	new_data_offset;/* only relevant while reshaping */
+	/*
+	 * +---------------------------------+----+-----+-----+
+	 * |				     |	  |	|     |
+	 * +---------------------------------+----+-----+-----+
+	 * |		   s1		     | s2 |  s3 |  s4 |
+	 * s1: 等于 sb_start ，也是磁盘有效长度
+	 * s2+s3: md 保留空间，其中 s2 用于存放 raid 超级块，也为 sb_size
+	 * s4: 磁盘大小 64K 对齐后的多余部分
+	 * 磁盘大小是 s1+s2+s3+s4
+	 */
 	sector_t	sb_start;	/* offset of the super block (in 512byte sectors) */
 	int		sb_size;	/* bytes in the superblock */
 	int		preferred_minor;	/* autorun support */
@@ -85,6 +100,7 @@ struct md_rdev {
 	unsigned long	flags;	/* bit set of 'enum flag_bits' bits. */
 	wait_queue_head_t blocked_wait;
 
+	/* /proc/mdstat 里可以查看 */
 	int desc_nr;			/* descriptor index in the superblock */
 	int raid_disk;			/* role of device in array */
 	int new_raid_disk;		/* role that the device will have in
@@ -306,25 +322,46 @@ enum {
 	MD_RESYNC_ACTIVE = 3,
 };
 
+/*
+ * md 设备通过块设备号和 struct block_device 关联起来，低层成员磁盘也指向和它相
+ * 对应的 block_device ，正是以 block_device 为"纽带"，使得 md 可以构建在其它的
+ * 物理或虚拟磁盘设备之上，成为一个"栈式"块设备
+ */
 struct mddev {
+	/* 与 md personality 相关 */
 	void				*private;
 	struct md_personality		*pers;
+	/* md 设备的设备号 */
 	dev_t				unit;
+	/* md 设备的次设备号 */
 	int				md_minor;
 	struct list_head		disks;
 	unsigned long			flags;
 	unsigned long			sb_flags;
 
+	/* 如果为 1 ，表示 md 设备已经被挂起 */
 	int				suspended;
+	/* 计数器。发给 personality 处理前加 1 ，personality 处理结束后减 1 */
 	struct percpu_ref		active_io;
+	/*
+	 * 取值为 0/1/2
+	 * 0: 可写
+	 * 1: 只读
+	 * 2: 只读，但在第一次写时自动转换为可写(即将元数据标记为脏)
+	 */
 	int				ro;
 	int				sysfs_active; /* set when sysfs deletes
 						       * are happening, so run/
 						       * takeover/stop are not safe
 						       */
+	/* 说明 md 设备是一个虚拟磁盘类设备 */
 	struct gendisk			*gendisk;
 
 	struct kobject			kobj;
+	/*
+	 * md 设备保持活动到什么时候。 UNTIL_IOCTL 保持到 IOCTL 结束， UNTIL_STOP
+	 * 保持到 md 设备停止， 0 表示可以释放
+	 */
 	int				hold_active;
 #define	UNTIL_IOCTL	1
 #define	UNTIL_STOP	2
@@ -333,21 +370,47 @@ struct mddev {
 	int				major_version,
 					minor_version,
 					patch_version;
+	/*
+	 * 0: 表示 MD 设备的超级块只保存在内存中
+	 * 1: 表示 MD 设备的超级块不仅在内存中，还保存在其成员磁盘中，以便在系统
+	 *    重启之后能够读取超级块信息，重建 MD 设备。
+	 */
 	int				persistent;
+	/* 为 1 表示元数据由外部管理，如用户空间 */
 	int				external;	/* metadata is
 							 * managed externally */
+	/*
+	 * 当 external 为 1 时有效。反映元数据的类型。 sysfs 文件系统中 metadata
+	 * 属性文件的内容取决于 persistent,external,metadata_type 的值
+	 */
 	char				metadata_type[17]; /* externally set*/
+	/*
+	 * 以扇区为单位的 chunk 长度。 md 设备的数据被划分为多个 chunk(即条带模
+	 * 型中的条带)，循环保存在成员磁盘上
+	 */
 	int				chunk_sectors;
 	time64_t			ctime, utime;
+	/*
+	 * layout 是 md 设备的布局，仅适用某些 raid 个性，例如 raid5 的向左/向右
+	 * 对称/不对称算法等
+	 */
 	int				level, layout;
 	char				clevel[16];
 	int				raid_disks;
 	int				max_disks;
+	/* 单个成员磁盘大小 */
 	sector_t			dev_sectors;	/* used size of
 							 * component devices */
+	/* md 设备大小 */
 	sector_t			array_sectors; /* exported array size */
 	int				external_size; /* size managed
 							* externally */
+	/*
+	 * md 设备的更新计数器，在创建 md 设备时清零，每次发生"重大事件"，如启动
+	 * 阵列、停止队列、添加设备、备用盘激活等时递增 1 次。记录在 md 设备超级
+	 * 块中，因此比较从各个成员磁盘读取的超级块的这个计数器可以知道哪个成员
+	 * 磁盘更新
+	 */
 	__u64				events;
 	/* If the last 'event' was simply a clean->dirty transition, and
 	 * we didn't write it to the spares, then it is safe and simple
@@ -356,6 +419,7 @@ struct mddev {
 	 */
 	int				can_decrease_events;
 
+	/* md 设备的唯一标识符 */
 	char				uuid[16];
 
 	/* If the array is being reshaped, we need to record the
@@ -363,12 +427,25 @@ struct mddev {
 	 * This is written to the superblock.
 	 * If reshape_position is MaxSector, then no reshape is happening (yet).
 	 */
+	/* 如果为 MaxSector ，表示没有进行 reshape ，或 reshape 已完成 */
 	sector_t			reshape_position;
+	/*
+	 * 下面 5 个成员都是与 reshape 相关的。
+	 * delta_disks: 对成员磁盘数目的改变
+	 * new_level: 新的 raid 级别
+	 * new_layout: 新的布局
+	 */
 	int				delta_disks, new_level, new_layout;
+	/* 新的 chunk 长度，以扇区为单位 */
 	int				new_chunk_sectors;
 	int				reshape_backwards;
 
+	/* 仅适用于某些 raid 个性，例如 raid5d 内核线程循环处理 stripe_head */
 	struct md_thread __rcu		*thread;	/* management thread */
+	/*
+	 * 仅适用于某些 raid 个性，例如 resync 内核线程被用来处理同步、恢复、
+	 * reshape 等
+	 */
 	struct md_thread __rcu		*sync_thread;	/* doing resync or reconstruct */
 
 	/* 'last_sync_action' is initialized to "none".  It is set when a
@@ -477,6 +554,7 @@ struct mddev {
 	struct timer_list		safemode_timer;
 	struct percpu_ref		writes_pending;
 	int				sync_checkers;	/* # of threads checking writes_pending */
+	/* 与 gendisk.queue 指向相同的 request queue */
 	struct request_queue		*queue;	/* for plugging ... */
 
 	struct bitmap			*bitmap; /* the bitmap for the device */
@@ -636,6 +714,7 @@ struct md_personality
 	int (*hot_add_disk) (struct mddev *mddev, struct md_rdev *rdev);
 	int (*hot_remove_disk) (struct mddev *mddev, struct md_rdev *rdev);
 	int (*spare_active) (struct mddev *mddev);
+	/* 支持冗余特性的需要定义 */
 	sector_t (*sync_request)(struct mddev *mddev, sector_t sector_nr, int *skipped);
 	int (*resize) (struct mddev *mddev, sector_t sectors);
 	sector_t (*size) (struct mddev *mddev, sector_t sectors, int raid_disks);

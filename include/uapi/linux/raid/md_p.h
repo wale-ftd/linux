@@ -48,6 +48,16 @@
 #define MD_RESERVED_BYTES		(64 * 1024)
 #define MD_RESERVED_SECTORS		(MD_RESERVED_BYTES / 512)
 
+/*
+ * +---------------------------------+----+-----+-----+
+ * |                                 |    |     |     |
+ * +---------------------------------+----+-----+-----+
+ * |               s1                | s2 |  s3 |  s4 |
+ * s1: 等于 sb_start ，也是磁盘有效长度
+ * s2+s3: md 保留空间，其中 s2 用于存放 raid 超级块，也为 sb_size
+ * s4: 磁盘大小 64K 对齐后的多余部分
+ * 磁盘大小是 s1+s2+s3+s4
+ */
 #define MD_NEW_SIZE_SECTORS(x)		((x & ~(MD_RESERVED_SECTORS - 1)) - MD_RESERVED_SECTORS)
 
 #define MD_SB_BYTES			4096

@@ -577,6 +577,7 @@ static bool blk_add_partition(struct gendisk *disk,
 
 	if (IS_BUILTIN(CONFIG_BLK_DEV_MD) &&
 	    (state->parts[p].flags & ADDPART_FLAG_RAID))
+	/* 发现是 raid 分区 */
 		md_autodetect_dev(part->bd_dev);
 
 	return true;

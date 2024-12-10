@@ -39,6 +39,7 @@ struct bio_crypt_ctx;
 
 struct block_device {
 	sector_t		bd_start_sect;
+	/* 磁盘的实际大小 */
 	sector_t		bd_nr_sectors;
 	struct gendisk *	bd_disk;
 	struct request_queue *	bd_queue;

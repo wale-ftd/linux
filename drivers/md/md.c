@@ -857,6 +857,7 @@ static struct md_personality *find_pers(int level, char *clevel)
 }
 
 /* return the offset of the super block in 512byte sectors */
+/* 根据成员磁盘的实际大小计算成员磁盘的有效大小 */
 static inline sector_t calc_dev_sboffset(struct md_rdev *rdev)
 {
 	return MD_NEW_SIZE_SECTORS(bdev_nr_sectors(rdev->bdev));
@@ -1108,6 +1109,11 @@ static unsigned int calc_sb_csum(mdp_super_t *sb)
 struct super_type  {
 	char		    *name;
 	struct module	    *owner;
+	/*
+	 * 读取 super block ，并校验 super block 是否完好，可能还需要将当前加载
+	 * 的成员磁盘的 super block 和 MD 设备链表中已加载的成员磁盘的超级块进行
+	 * 比较。如 super_90_load()/super_1_load()
+	 */
 	int		    (*load_super)(struct md_rdev *rdev,
 					  struct md_rdev *refdev,
 					  int minor_version);
@@ -2353,6 +2359,7 @@ static bool rdev_read_only(struct md_rdev *rdev)
 		(rdev->meta_bdev && bdev_read_only(rdev->meta_bdev));
 }
 
+/* 将成员磁盘 rdev 添加到 md 设备中 */
 static int bind_rdev_to_array(struct md_rdev *rdev, struct mddev *mddev)
 {
 	char b[BDEVNAME_SIZE];
@@ -3587,6 +3594,7 @@ static const struct sysfs_ops rdev_sysfs_ops = {
 	.show		= rdev_attr_show,
 	.store		= rdev_attr_store,
 };
+/* /sys/devices/virtual/block/mdX/md/rdevX 里查看 */
 static const struct kobj_type rdev_ktype = {
 	.release	= rdev_free,
 	.sysfs_ops	= &rdev_sysfs_ops,
@@ -5627,7 +5635,9 @@ struct mddev *md_alloc(dev_t dev, char *name)
 	struct mddev *mddev;
 	struct gendisk *disk;
 	int partitioned;
+	/* 分区最大数目 */
 	int shift;
+	/* MD 设备的次设备号 */
 	int unit;
 	int error ;
 
@@ -5828,6 +5838,12 @@ int md_run(struct mddev *mddev)
 	 * the only valid external interface is through the md
 	 * device.
 	 */
+	/*
+	 * 冲刷所有成员磁盘在缓冲区中的数据，从现在开始这个成员磁盘不能被单独使
+	 * 用，只能通过 MD 设备来使用。
+	 * 在此过程中，还需要验证成员磁盘的数据区和元数据区没有发生重叠。
+	 *   如果数据区在元数据区前面，确保阵列数据的起始
+	 */
 	mddev->has_superblocks = false;
 	rdev_for_each(rdev, mddev) {
 		if (test_bit(Faulty, &rdev->flags))
@@ -5865,6 +5881,10 @@ int md_run(struct mddev *mddev)
 				return -EINVAL;
 			}
 		}
+		/*
+		 * 在属性发生变化时通过 /sys/block/md0/md/array_state 通知用户空
+		 * 间
+		 */
 		sysfs_notify_dirent_safe(rdev->sysfs_state);
 		nowait = nowait && bdev_nowait(rdev->bdev);
 	}
@@ -5912,6 +5932,7 @@ int md_run(struct mddev *mddev)
 	}
 	strscpy(mddev->clevel, pers->name, sizeof(mddev->clevel));
 
+	/* 如果 md 设备有 reshape 的需求，那么需要定义 pers->start_reshape 回调 */
 	if (mddev->reshape_position != MaxSector &&
 	    pers->start_reshape == NULL) {
 		/* This personality cannot handle reshaping... */
@@ -5920,6 +5941,13 @@ int md_run(struct mddev *mddev)
 		goto abort;
 	}
 
+	/*
+	 * raid 设备的成员磁盘物理上要独立不相关，尤其对于支持冗余特性的 md 设
+	 * 备。也就是说，如果 md 个性化结构定义了 sync_request ，我们希望它的任
+	 * 何一个成员磁盘都不会和其他 md 设备的成员磁盘是属于同一个物理磁盘，即
+	 * 对应块设备描述符具有相同的 bd_contains 域。如果不独立，是一种"愚蠢"的
+	 * 配置
+	 */
 	if (pers->sync_request) {
 		/* Warn if this is a potentially silly
 		 * configuration.
@@ -5965,6 +5993,7 @@ int md_run(struct mddev *mddev)
 			(unsigned long long)pers->size(mddev, 0, 0) / 2);
 		err = -EINVAL;
 	}
+	/* 支持冗余特性的，需要创建位图 */
 	if (err == 0 && pers->sync_request &&
 	    (mddev->bitmap_info.file || mddev->bitmap_info.offset)) {
 		struct bitmap *bitmap;
@@ -6021,6 +6050,7 @@ int md_run(struct mddev *mddev)
 		if (nowait)
 			blk_queue_flag_set(QUEUE_FLAG_NOWAIT, mddev->queue);
 	}
+	/* 支持冗余特性的，需要与其相关的节点 */
 	if (pers->sync_request) {
 		if (mddev->kobj.sd &&
 		    sysfs_create_group(&mddev->kobj, &md_redundancy_group))
@@ -6044,6 +6074,10 @@ int md_run(struct mddev *mddev)
 	spin_lock(&mddev->lock);
 	mddev->pers = pers;
 	spin_unlock(&mddev->lock);
+	/*
+	 * 在 sysfs 文件系统和 MD 设备对应的目录下创建一系列链接文件，目录为各个
+	 * 成员磁盘的目录
+	 */
 	rdev_for_each(rdev, mddev)
 		if (rdev->raid_disk >= 0)
 			sysfs_link_rdev(mddev, rdev); /* failure here is OK */
@@ -6056,6 +6090,7 @@ int md_run(struct mddev *mddev)
 	set_bit(MD_RECOVERY_NEEDED, &mddev->recovery);
 
 	if (mddev->sb_flags)
+	/* 将超级块信息更新到所有成员磁盘上 */
 		md_update_sb(mddev, 0);
 
 	md_new_event();
@@ -6100,12 +6135,14 @@ int do_md_run(struct mddev *mddev)
 	/* run start up tasks that require md_thread */
 	md_start(mddev);
 
+	/* 唤醒 md 设备守护线程和同步线程看是否有工作可做 */
 	md_wakeup_thread(mddev->thread);
 	md_wakeup_thread(mddev->sync_thread); /* possibly kick off a reshape */
 
 	set_capacity_and_notify(mddev->gendisk, mddev->array_sectors);
 	clear_bit(MD_NOT_READY, &mddev->flags);
 	mddev->changed = 1;
+	/* 向用户空间发送 KOBJ_CHANGE 信息 */
 	kobject_uevent(&disk_to_dev(mddev->gendisk)->kobj, KOBJ_CHANGE);
 	sysfs_notify_dirent_safe(mddev->sysfs_state);
 	sysfs_notify_dirent_safe(mddev->sysfs_action);
@@ -6720,6 +6757,11 @@ static int get_disk_info(struct mddev *mddev, void __user * arg)
 	return 0;
 }
 
+/*
+ * @info: 待添加的成员磁盘的配置/状态信息。从用户空间传入
+ *
+ * 成功返回 0 ；否则返回负的错误码
+ */
 int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 {
 	struct md_rdev *rdev;
@@ -6736,6 +6778,7 @@ int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 		return -EOVERFLOW;
 
 	if (!mddev->raid_disks) {
+	/* 处理组装阵列的情况 */
 		int err;
 		/* expecting a device which has a superblock */
 		rdev = md_import_device(dev, mddev->major_version, mddev->minor_version);
@@ -6748,6 +6791,10 @@ int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 			struct md_rdev *rdev0
 				= list_entry(mddev->disks.next,
 					     struct md_rdev, same_set);
+			/*
+			 * 将当前加载的成员磁盘的 super block 和 MD 设备链表中已
+			 * 加载的成员磁盘的超级块进行比较
+			 */
 			err = super_types[mddev->major_version]
 				.load_super(rdev, rdev0, mddev->minor_version);
 			if (err < 0) {
@@ -6770,6 +6817,7 @@ int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 	 * written
 	 */
 	if (mddev->pers) {
+	/* 处理"热插入"成员磁盘的情况 */
 		int err;
 		if (!mddev->pers->hot_add_disk) {
 			pr_warn("%s: personality does not support diskops!\n",
@@ -6880,13 +6928,16 @@ int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 	/* otherwise, md_add_new_disk is only allowed
 	 * for major_version==0 superblocks
 	 */
+	/* 创建阵列 */
 	if (mddev->major_version != 0) {
 		pr_warn("%s: ADD_NEW_DISK not supported\n", mdname(mddev));
 		return -EINVAL;
 	}
 
+	/* 只处理"好的"的成员磁盘 */
 	if (!(info->state & (1<<MD_DISK_FAULTY))) {
 		int err;
+		/* 传入的参数是 (-1,0) ，因此不会试图去从磁盘上加载超级块 */
 		rdev = md_import_device(dev, -1, 0);
 		if (IS_ERR(rdev)) {
 			pr_warn("md: error, md_import_device() returned %ld\n",
@@ -6913,8 +6964,13 @@ int md_add_new_disk(struct mddev *mddev, struct mdu_disk_info_s *info)
 			rdev->sb_start = bdev_nr_sectors(rdev->bdev);
 		} else
 			rdev->sb_start = calc_dev_sboffset(rdev);
+		/*
+		 * 对于有持久化 superblock 的 MD 设备，MD 的 sb 保存在成员磁盘的
+		 * 末尾，所以， sb_start 就是成员磁盘的有效大小
+		 */
 		rdev->sectors = rdev->sb_start;
 
+		/* 将这个成员磁盘添加到 md 设备中 */
 		err = bind_rdev_to_array(rdev, mddev);
 		if (err) {
 			export_rdev(rdev, mddev);
@@ -7155,6 +7211,7 @@ static int set_bitmap_file(struct mddev *mddev, int fd)
 int md_set_array_info(struct mddev *mddev, struct mdu_array_info_s *info)
 {
 	if (info->raid_disks == 0) {
+	/* 处理组装阵列的情况 */
 		/* just setting version number for superblock loading */
 		if (info->major_version < 0 ||
 		    info->major_version >= ARRAY_SIZE(super_types) ||
@@ -7174,6 +7231,7 @@ int md_set_array_info(struct mddev *mddev, struct mdu_array_info_s *info)
 		mddev->ctime         = ktime_get_real_seconds();
 		return 0;
 	}
+	/* 创建阵列 */
 	mddev->major_version = MD_MAJOR_VERSION;
 	mddev->minor_version = MD_MINOR_VERSION;
 	mddev->patch_version = MD_PATCHLEVEL_VERSION;
@@ -9908,6 +9966,10 @@ struct detected_devices_node {
 	dev_t dev;
 };
 
+/*
+ * 发现磁盘设备时，调用 rescan_partitions -> md_autodetect_dev
+ * prepare_namespace -> md_run_setup -> autodetect_raid -> autostart_arrays
+ */
 void md_autodetect_dev(dev_t dev)
 {
 	struct detected_devices_node *node_detected_dev;
@@ -9916,11 +9978,16 @@ void md_autodetect_dev(dev_t dev)
 	if (node_detected_dev) {
 		node_detected_dev->dev = dev;
 		mutex_lock(&detected_devices_mutex);
+		/* autostart_arrays()使用 */
 		list_add_tail(&node_detected_dev->list, &all_detected_devices);
 		mutex_unlock(&detected_devices_mutex);
 	}
 }
 
+/*
+ * 根据 md_autodetect_dev 记录在 all_detected_devices 中的成员磁盘
+ * 设备号链表分析超级块、组装并启动 md 设备
+ */
 void md_autostart_arrays(int part)
 {
 	struct md_rdev *rdev;
