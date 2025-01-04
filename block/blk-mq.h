@@ -7,6 +7,7 @@
 
 struct blk_mq_tag_set;
 
+/* 每个块设备分配一个 */
 struct blk_mq_ctxs {
 	struct kobject kobj;
 	struct blk_mq_ctx __percpu	*queue_ctx;
@@ -15,6 +16,7 @@ struct blk_mq_ctxs {
 /**
  * struct blk_mq_ctx - State for a software queue facing the submitting CPUs
  */
+/* 每个 cpu 一个。还有一个管理 blk_mq_ctx 的 struct blk_mq_ctxs */
 struct blk_mq_ctx {
 	struct {
 		spinlock_t		lock;

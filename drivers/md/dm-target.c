@@ -163,6 +163,7 @@ static long io_err_dax_direct_access(struct dm_target *ti, pgoff_t pgoff,
 	return -EIO;
 }
 
+/* 致错规则：将所涉及范围内的 IO 请求都映射为"失败" */
 static struct target_type error_target = {
 	.name = "error",
 	.version = {1, 6, 0},

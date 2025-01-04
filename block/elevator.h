@@ -35,11 +35,14 @@ struct elevator_mq_ops {
 	int (*request_merge)(struct request_queue *q, struct request **, struct bio *);
 	void (*request_merged)(struct request_queue *, struct request *, enum elv_merge);
 	void (*requests_merged)(struct request_queue *, struct request *, struct request *);
+	/* 如 dd_limit_depth() */
 	void (*limit_depth)(blk_opf_t, struct blk_mq_alloc_data *);
 	void (*prepare_request)(struct request *);
 	void (*finish_request)(struct request *);
+	/* 如 dd_insert_requests() */
 	void (*insert_requests)(struct blk_mq_hw_ctx *hctx, struct list_head *list,
 			blk_insert_t flags);
+	/* 如 dd_dispatch_request() */
 	struct request *(*dispatch_request)(struct blk_mq_hw_ctx *);
 	bool (*has_work)(struct blk_mq_hw_ctx *);
 	void (*completed_request)(struct request *, u64);

@@ -85,6 +85,7 @@ struct request {
 	blk_opf_t cmd_flags;		/* op and common flags */
 	req_flags_t rq_flags;
 
+	/* blk_mq_tags.static_rqs 数组里的索引值 */
 	int tag;
 	int internal_tag;
 
@@ -307,6 +308,7 @@ struct blk_mq_hw_ctx {
 	/**
 	 * @run_work: Used for scheduling a hardware queue run at a later time.
 	 */
+	/* 为 blk_mq_run_work_fn() */
 	struct delayed_work	run_work;
 	/** @cpumask: Map of available CPUs where this hctx can run. */
 	cpumask_var_t		cpumask;
@@ -442,6 +444,7 @@ struct blk_mq_hw_ctx {
  *	set of hardware queues.
  */
 struct blk_mq_queue_map {
+	/* mq_map[软件队列编号] = 硬件队列编号 */
 	unsigned int *mq_map;
 	unsigned int nr_queues;
 	unsigned int queue_offset;
@@ -495,17 +498,42 @@ enum hctx_type {
  * @srcu:	   Use as lock when type of the request queue is blocking
  *		   (BLK_MQ_F_BLOCKING).
  */
+/*
+ * 用于描述与存储器件相关的 tag 集合，抽象了存储器件的 IO 特征
+ *
+ * nr_maps == 1 时：
+ *        cpu:   0   1
+ *   hw queue:     0
+ *
+ *        cpu:   0   1
+ *   hw queue:   0   1
+ *
+ * nr_maps == 3 时：
+ *   nr_hw_queues <= NR_CPUS
+ *   nr_hw_queues > NR_CPUS
+ */
 struct blk_mq_tag_set {
 	const struct blk_mq_ops	*ops;
+	/* 软件队列(每个 CPU 一个队列)到硬件队列的映射表 */
 	struct blk_mq_queue_map	map[HCTX_MAX_TYPES];
+	/*
+	 * map 映射表的数量，取值[1, HCTX_MAX_TYPES]，一般为 1 。如果 nr_maps 为 1
+	 * 时， nr_hw_queues 不能大于 NR_CPUS ，详见 blk_mq_alloc_tag_set()
+	 */
 	unsigned int		nr_maps;
+	/* 多数设备为 1 ， nvme 可能 > 1 */
 	unsigned int		nr_hw_queues;
+	/* 一般是 32 */
 	unsigned int		queue_depth;
 	unsigned int		reserved_tags;
+	/* 用于存放设备驱动 payload 数据，例如 scsi 中，用于存放 scsi_cmnd, sg list */
 	unsigned int		cmd_size;
+	/* 用于避免远端内存访问问题。分配 request 时会使用 */
 	int			numa_node;
+	/*  */
 	unsigned int		timeout;
 	unsigned int		flags;
+	/* 块设备驱动的私有数据。对于 scsi ，存放的是 Scsi_Host */
 	void			*driver_data;
 
 	struct blk_mq_tags	**tags;
@@ -534,11 +562,15 @@ typedef bool (busy_tag_iter_fn)(struct request *, void *);
  * struct blk_mq_ops - Callback functions that implements block driver
  * behaviour.
  */
+/* 如 scsi_mq_ops */
 struct blk_mq_ops {
 	/**
 	 * @queue_rq: Queue a new request from block IO.
 	 */
-	/* 驱动处理请求 */
+	/*
+	 * block 层 IO 请求往块设备驱动层下发的接口。基于 mq 的块设备驱动必需要实现
+	 * 的处理请求函数
+	 */
 	blk_status_t (*queue_rq)(struct blk_mq_hw_ctx *,
 				 const struct blk_mq_queue_data *);
 
@@ -565,11 +597,16 @@ struct blk_mq_ops {
 	 * reserved budget. Also we have to handle failure case
 	 * of .get_budget for avoiding I/O deadlock.
 	 */
+	/*
+	 * 在 IO 请求往块设备驱动派发之前，需要先获取预算，如果获取失败，则不允许下
+	 * 发(这里可以实现 IO 限流，避免器件阻塞)
+	 */
 	int (*get_budget)(struct request_queue *);
 
 	/**
 	 * @put_budget: Release the reserved budget.
 	 */
+	/* 如果获取预算之后没有执行 queue_rq ，则要调用该接口释放预算 */
 	void (*put_budget)(struct request_queue *, int);
 
 	/**
@@ -733,16 +770,28 @@ struct request *blk_mq_alloc_request_hctx(struct request_queue *q,
 /*
  * Tag address space map.
  */
+/* 用于描述 tag 和 request 的集合 */
 struct blk_mq_tags {
+	/* 一般情况下等于 queue depth */
 	unsigned int nr_tags;
 	unsigned int nr_reserved_tags;
+	/*
+	 * tag set 可以是多个 request queue 共享的，记录当前活跃队列数量的目的是为了
+	 * 均匀分配 tag 到每个 request queue
+	 */
 	unsigned int active_queues;
 
+	/* 管理 tag 的位图。正在使用的 tag ，对应的 bit 位置 1 */
 	struct sbitmap_queue bitmap_tags;
 	struct sbitmap_queue breserved_tags;
 
+	/*
+	 * rqs/static_rqs 是一个数组，其索引值称为 tag 。块设备初始化时就会分配好
+	 * request ，见 blk_mq_alloc_rqs()
+	 */
 	struct request **rqs;
 	struct request **static_rqs;
+	/* requests 占用的页面 */
 	struct list_head page_list;
 
 	/*

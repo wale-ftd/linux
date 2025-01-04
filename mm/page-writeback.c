@@ -2007,7 +2007,12 @@ int balance_dirty_pages_ratelimited_flags(struct address_space *mapping,
 	if (!wb)
 		wb = &bdi->wb;
 
+	/* 进程达到多少脏页时，进程需要进行脏页平衡，测试时有 32/64/256 */
 	ratelimit = current->nr_dirtied_pause;
+	/*
+	 * 如果已经执行过 balance_dirty_pages ，调整 ratelimit ，相当于降低
+	 * 到 8 个页面，这样会更容易再次触发 balance_dirty_pages
+	 */
 	if (wb->dirty_exceeded)
 		ratelimit = min(ratelimit, 32 >> (PAGE_SHIFT - 10));
 

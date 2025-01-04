@@ -702,8 +702,10 @@ void submit_bio_noacct_nocheck(struct bio *bio)
 	 * it is active, and then process them after it returned.
 	 */
 	if (current->bio_list)
+	/* 如 bio_split 会分裂成 bio1 和 bio2 ， bio2 会被 subimt ，就会走这个路径 */
 		bio_list_add(&current->bio_list[0], bio);
 	else if (!bio->bi_bdev->bd_has_submit_bio)
+	/* mq 只用了 bio_list[0] */
 		__submit_bio_noacct_mq(bio);
 	else
 		__submit_bio_noacct(bio);

@@ -345,6 +345,7 @@ static inline void blk_mq_rq_time_init(struct request *rq, u64 alloc_time_ns)
 #endif
 }
 
+/* 初始化 tag 对应的 request */
 static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 		struct blk_mq_tags *tags, unsigned int tag)
 {
@@ -465,6 +466,7 @@ static struct request *__blk_mq_alloc_requests(struct blk_mq_alloc_data *data)
 			WARN_ON_ONCE(data->flags & BLK_MQ_REQ_RESERVED);
 
 			data->rq_flags |= RQF_USE_SCHED;
+			/* 对于配置了调度器的队列，限制队列深度(影响 tag 获取) */
 			if (ops->limit_depth)
 				ops->limit_depth(data->cmd_flags, data);
 		}
@@ -474,6 +476,10 @@ retry:
 	data->ctx = blk_mq_get_ctx(q);
 	data->hctx = blk_mq_map_queue(q, data->cmd_flags, data->ctx);
 	if (!(data->rq_flags & RQF_SCHED_TAGS))
+	/*
+	 * 对于无调度器的队列，更新 tag set 的当前活跃队列数量(用于均分 tag 到不同
+	 * request_queue)
+	 */
 		blk_mq_tag_busy(data->hctx);
 
 	if (data->flags & BLK_MQ_REQ_RESERVED)
@@ -2007,6 +2013,7 @@ static void blk_mq_commit_rqs(struct blk_mq_hw_ctx *hctx, int queued,
 /*
  * Returns true if we did some work AND can potentially do more.
  */
+/* 派发 IO 到硬件的总入口 */
 bool blk_mq_dispatch_rq_list(struct blk_mq_hw_ctx *hctx, struct list_head *list,
 			     unsigned int nr_budgets)
 {
@@ -2230,6 +2237,7 @@ EXPORT_SYMBOL(blk_mq_delay_run_hw_queue);
  * pending requests to be sent. If this is true, run the queue to send requests
  * to hardware.
  */
+/* 派发 IO 请求到块设备驱动 */
 void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 {
 	bool need_run;
@@ -2249,6 +2257,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 	 * And queue will be rerun in blk_mq_unquiesce_queue() if it is
 	 * quiesced.
 	 */
+	/* 如果队列不在静默状态(quiesced)且有 IO 请求 pending ，则启动派发 */
 	__blk_mq_run_dispatch_ops(hctx->queue, false,
 		need_run = !blk_queue_quiesced(hctx->queue) &&
 		blk_mq_hctx_has_pending(hctx));
@@ -2256,11 +2265,16 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async)
 	if (!need_run)
 		return;
 
+	/* 如果是异步派发，则启动延迟任务 hctx->run_work 执行 IO 请求派发 */
 	if (async || !cpumask_test_cpu(raw_smp_processor_id(), hctx->cpumask)) {
 		blk_mq_delay_run_hw_queue(hctx, 0);
 		return;
 	}
 
+	/*
+	 * 如果是同步派发，且当前 cpu 的软件队列映射到此硬件队列，则在当前线程上下文
+	 * 中执行 IO 请求派发
+	 */
 	blk_mq_run_dispatch_ops(hctx->queue,
 				blk_mq_sched_dispatch_requests(hctx));
 }
@@ -2539,11 +2553,13 @@ static void blk_mq_insert_request(struct request *rq, blk_insert_t flags)
 		WARN_ON_ONCE(rq->tag != BLK_MQ_NO_TAG);
 
 		list_add(&rq->queuelist, &list);
+		/* 将请求插入调度器队列 */
 		q->elevator->type->ops.insert_requests(hctx, &list, flags);
 	} else {
 		trace_block_rq_insert(rq);
 
 		spin_lock(&ctx->lock);
+		/* 与当前 cpu 软件队列中的 IO request 合并 */
 		if (flags & BLK_MQ_INSERT_AT_HEAD)
 			list_add(&rq->queuelist, &ctx->rq_lists[hctx->type]);
 		else
@@ -2855,6 +2871,10 @@ static bool blk_mq_attempt_bio_merge(struct request_queue *q,
 				     struct bio *bio, unsigned int nr_segs)
 {
 	if (!blk_queue_nomerges(q) && bio_mergeable(bio)) {
+		/*
+		 * 尝试与当前线程的 plug list(如果当前线程正在做 IO plug)中的 IO request
+		 * 合并
+		 */
 		if (blk_attempt_plug_merge(q, bio, nr_segs))
 			return true;
 		if (blk_mq_sched_bio_merge(q, bio, nr_segs))
@@ -2863,6 +2883,7 @@ static bool blk_mq_attempt_bio_merge(struct request_queue *q,
 	return false;
 }
 
+/* 为 bio 分配 request */
 static struct request *blk_mq_get_new_requests(struct request_queue *q,
 					       struct blk_plug *plug,
 					       struct bio *bio,
@@ -2881,6 +2902,7 @@ static struct request *blk_mq_get_new_requests(struct request_queue *q,
 	if (blk_mq_attempt_bio_merge(q, bio, nsegs))
 		goto queue_exit;
 
+	/* 尝试 IO 请求的 QoS 限流 */
 	rq_qos_throttle(q, bio);
 
 	if (plug) {
@@ -3014,6 +3036,7 @@ void blk_mq_submit_bio(struct bio *bio)
 	}
 
 	hctx = rq->mq_hctx;
+	/* 有 IO 调度器的，发送到 IO 调度器；否则，直接派发到硬件队列 */
 	if ((rq->rq_flags & RQF_USE_SCHED) ||
 	    (hctx->dispatch_busy && (q->nr_hw_queues == 1 || !is_sync))) {
 		blk_mq_insert_request(rq, 0);

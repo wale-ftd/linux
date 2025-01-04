@@ -34,6 +34,12 @@ struct rq_qos {
 #endif
 };
 
+/*
+ * 目前实现的 QoS 策略有三种：
+ * wbt(wbt_rqos_ops)
+ * io-latency cgroup(blkcg_iolatency_ops)
+ * io-cost cgroup(ioc_rqos_ops)
+ */
 struct rq_qos_ops {
 	void (*throttle)(struct rq_qos *, struct bio *);
 	void (*track)(struct rq_qos *, struct request *, struct bio *);

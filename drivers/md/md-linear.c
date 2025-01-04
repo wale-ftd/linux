@@ -215,12 +215,14 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 		return true;
 
 	tmp_dev = which_dev(mddev, bio_sector);
+	/* tmp_dev 的起始扇区号 */
 	start_sector = tmp_dev->end_sector - tmp_dev->rdev->sectors;
 	end_sector = tmp_dev->end_sector;
 	data_offset = tmp_dev->rdev->data_offset;
 
 	if (unlikely(bio_sector >= end_sector ||
 		     bio_sector < start_sector))
+	/* 要访问的扇区编号落在已查找到成员磁盘的范围之外 */
 		goto out_of_bounds;
 
 	if (unlikely(is_rdev_broken(tmp_dev->rdev))) {
@@ -230,6 +232,10 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 	}
 
 	if (unlikely(bio_end_sector(bio) > end_sector)) {
+	/*
+	 * 要访问的扇区大小跨越了成员磁盘边界，必须 split 。这里看似只处理了跨
+	 * 越两个成员磁盘的情况，实际对于跨越多个成员磁盘的情况，会递归 split
+	 */
 		/* This bio crosses a device boundary, so we have to split it */
 		struct bio *split = bio_split(bio, end_sector - bio_sector,
 					      GFP_NOIO, &mddev->bio_set);
@@ -239,6 +245,7 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 	}
 
 	md_account_bio(mddev, &bio);
+	/* 重定向 */
 	bio_set_dev(bio, tmp_dev->rdev->bdev);
 	bio->bi_iter.bi_sector = bio->bi_iter.bi_sector -
 		start_sector + data_offset;
@@ -252,6 +259,7 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 			trace_block_bio_remap(bio, disk_devt(mddev->gendisk),
 					      bio_sector);
 		mddev_check_write_zeroes(mddev, bio);
+		/* 提交映射后的 bio */
 		submit_bio_noacct(bio);
 	}
 	return true;

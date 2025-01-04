@@ -2242,6 +2242,7 @@ static void sync_super(struct mddev *mddev, struct md_rdev *rdev)
 	super_types[mddev->major_version].sync_super(mddev, rdev);
 }
 
+/* 判断两个 md 设备是否有共享一个物理磁盘 */
 static int match_mddev_units(struct mddev *mddev1, struct mddev *mddev2)
 {
 	struct md_rdev *rdev, *rdev2;
@@ -5840,9 +5841,8 @@ int md_run(struct mddev *mddev)
 	 */
 	/*
 	 * 冲刷所有成员磁盘在缓冲区中的数据，从现在开始这个成员磁盘不能被单独使
-	 * 用，只能通过 MD 设备来使用。
-	 * 在此过程中，还需要验证成员磁盘的数据区和元数据区没有发生重叠。
-	 *   如果数据区在元数据区前面，确保阵列数据的起始
+	 * 用，只能通过 MD 设备来使用。在此过程中，还需要验证成员磁盘的数据区和
+	 * 元数据区没有发生重叠。
 	 */
 	mddev->has_superblocks = false;
 	rdev_for_each(rdev, mddev) {
@@ -5981,10 +5981,12 @@ int md_run(struct mddev *mddev)
 	if (start_readonly && md_is_rdwr(mddev))
 		mddev->ro = MD_AUTO_READ; /* read-only, but switch on first write */
 
+	/* 启动 md 设备 */
 	err = pers->run(mddev);
 	if (err)
 		pr_warn("md: pers->run() failed ...\n");
 	else if (pers->size(mddev, 0, 0) < mddev->array_sectors) {
+	/* 检验 md 大小 */
 		WARN_ONCE(!mddev->external_size,
 			  "%s: default size too small, but 'external_size' not in effect?\n",
 			  __func__);
@@ -6050,7 +6052,7 @@ int md_run(struct mddev *mddev)
 		if (nowait)
 			blk_queue_flag_set(QUEUE_FLAG_NOWAIT, mddev->queue);
 	}
-	/* 支持冗余特性的，需要与其相关的节点 */
+	/* 支持冗余特性的，需要创建与其相关的节点 */
 	if (pers->sync_request) {
 		if (mddev->kobj.sd &&
 		    sysfs_create_group(&mddev->kobj, &md_redundancy_group))

@@ -51,6 +51,7 @@
 static const char *_name = DM_NAME;
 
 static unsigned int major;
+/* 保存 dm 的主设备号 */
 static unsigned int _major;
 
 static DEFINE_IDR(_minor_idr);

@@ -276,6 +276,8 @@ static int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 * If we have previous entries on our dispatch list, grab them first for
 	 * more fair dispatch.
 	 */
+	/*
+	 * 如果硬件派发队列 hctx->dispatch 非空, 则先派发这个队列中的 IO 请求 */
 	if (!list_empty_careful(&hctx->dispatch)) {
 		spin_lock(&hctx->lock);
 		if (!list_empty(&hctx->dispatch))
@@ -298,6 +300,7 @@ static int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 	 */
 	if (!list_empty(&rq_list)) {
 		blk_mq_sched_mark_restart_hctx(hctx);
+		/* 派发 hctx->dispatch 这个队列中的 IO 请求 */
 		if (!blk_mq_dispatch_rq_list(hctx, &rq_list, 0))
 			return 0;
 		need_dispatch = true;
@@ -305,12 +308,21 @@ static int __blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 		need_dispatch = hctx->dispatch_busy;
 	}
 
+	/*
+	 * 如果配置了调度器，则从调度队列中派发 IO 请求，最终还是会调用
+	 * blk_mq_dispatch_rq_list() 派发到硬件
+	 */
 	if (hctx->queue->elevator)
 		return blk_mq_do_dispatch_sched(hctx);
 
 	/* dequeue request one by one from sw queue if queue is busy */
+	/*
+	 * 如果需要继续派发，从软件队列(软件队列选取采用 Round-Robin 策略)中取 1 个
+	 * IO 请求派发，最终还是会调用 blk_mq_dispatch_rq_list() 派发到硬件
+	 */
 	if (need_dispatch)
 		return blk_mq_do_dispatch_ctx(hctx);
+	/* 否则，取映射到这个硬件队列的所有软件队列上的 IO 请求派发 */
 	blk_mq_flush_busy_ctxs(hctx, &rq_list);
 	blk_mq_dispatch_rq_list(hctx, &rq_list, 0);
 	return 0;
@@ -345,6 +357,7 @@ bool blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio,
 	bool ret = false;
 	enum hctx_type type;
 
+	/* 尝试与调度器队列中的 IO request 合并 */
 	if (e && e->type->ops.bio_merge) {
 		ret = e->type->ops.bio_merge(q, bio, nr_segs);
 		goto out_put;

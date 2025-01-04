@@ -16,6 +16,7 @@
 #include <linux/slab.h>
 #include <linux/log2.h>
 
+/* 作用：出现错误时向用户空间发送 uevent */
 static struct workqueue_struct *dm_stripe_wq;
 
 #define DM_MSG_PREFIX "striped"

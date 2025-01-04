@@ -1838,6 +1838,12 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
  * Implementation of open/close/ioctl on the special char device.
  *---------------------------------------------------------------
  */
+/*
+ * 主要流程为：
+ * 1. DM_DEV_CREATE_CMD
+ * 2. DM_TABLE_LOAD_CMD ，加载映射表到 inactive slot 。
+ * 3. DM_DEV_SUSPEND_CMD ，将 inactive slot 里的映射表交换到 active slot 。
+ */
 static ioctl_fn lookup_ioctl(unsigned int cmd, int *ioctl_flags)
 {
 	static const struct {
@@ -2159,6 +2165,7 @@ static const struct file_operations _ctl_fops = {
 	.llseek  = noop_llseek,
 };
 
+/* DM 的控制设备。路径名为 /dev/mapper/control */
 static struct miscdevice _dm_misc = {
 	.minor		= MAPPER_CTRL_MINOR,
 	.name		= DM_NAME,

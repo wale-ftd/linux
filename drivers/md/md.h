@@ -47,6 +47,7 @@ struct serial_in_rdev {
  */
 /* md 设备成员磁盘的抽象 */
 struct md_rdev {
+	/* 链接到 mddev.disks */
 	struct list_head same_set;	/* RAID devices within the same set */
 
 	/*
@@ -55,6 +56,7 @@ struct md_rdev {
 	 */
 	sector_t sectors;		/* Device size (in 512bytes sectors) */
 	struct mddev *mddev;		/* RAID array if running */
+	/* 用来判断 MD 设备最近是否空闲，以决定同步是否给正常 IO 让路 */
 	int last_events;		/* IO event timestamp */
 
 	/*
@@ -65,8 +67,11 @@ struct md_rdev {
 	struct block_device *meta_bdev;
 	struct block_device *bdev;	/* block device handle */
 
+	/* sb_page 指向保存该成员磁盘上的 raid 超级块的页面的指针 */
 	struct page	*sb_page, *bb_page;
+	/* 为 1 表示该成员磁盘的 raid 超级块已经被读入内存 */
 	int		sb_loaded;
+	/* 保存 raid 超级块的更新计数器 */
 	__u64		sb_events;
 	sector_t	data_offset;	/* start of data in array */
 	sector_t	new_data_offset;/* only relevant while reshaping */
@@ -82,6 +87,7 @@ struct md_rdev {
 	 */
 	sector_t	sb_start;	/* offset of the super block (in 512byte sectors) */
 	int		sb_size;	/* bytes in the superblock */
+	/* 在自动运行 MD 设备时采用的次设备号 */
 	int		preferred_minor;	/* autorun support */
 
 	struct kobject	kobj;
@@ -98,6 +104,10 @@ struct md_rdev {
 	 */
 
 	unsigned long	flags;	/* bit set of 'enum flag_bits' bits. */
+	/*
+	 * 等待该成员设备解除阻塞的等待队列。如果请求处理依赖于这个被阻塞的成员
+	 * 磁盘，则在此队列上等待。成员磁盘解除阻塞时唤醒队列的等待线程
+	 */
 	wait_queue_head_t blocked_wait;
 
 	/* /proc/mdstat 里可以查看 */
@@ -106,6 +116,7 @@ struct md_rdev {
 	int new_raid_disk;		/* role that the device will have in
 					 * the array after a level-change completes.
 					 */
+	/* 成员磁盘过去在阵列中的角色 */
 	int saved_raid_disk;		/* role that device used to have in the
 					 * array and could again if we did a partial
 					 * resync from the bitmap
@@ -125,9 +136,14 @@ struct md_rdev {
 					 * only maintained for arrays that
 					 * support hot removal
 					 */
+	/*
+	 * 连续读错误的次数。当超过一定阈值时，使该磁盘失效；若有一次成功读取，
+	 * 则清零，重新计数
+	 */
 	atomic_t	read_errors;	/* number of consecutive read errors that
 					 * we have tried to ignore.
 					 */
+	/* 距上次出现读错误以来过去的时间。被 raid10 用来修正读错误 */
 	time64_t	last_read_error;	/* monotonic time since our
 						 * last read error
 						 */
@@ -326,6 +342,12 @@ enum {
  * md 设备通过块设备号和 struct block_device 关联起来，低层成员磁盘也指向和它相
  * 对应的 block_device ，正是以 block_device 为"纽带"，使得 md 可以构建在其它的
  * 物理或虚拟磁盘设备之上，成为一个"栈式"块设备
+ *
+ * raid 设备的成员磁盘物理上要独立不相关的，对一个物理磁盘上的多个分区做 raid
+ * 是没有价值的，因为不但违背了 raid 阵列中成员磁盘独立性的原则，不能增加阵列
+ * 的可靠性，当这个物理磁盘失效后必然不可避免地导致数据丢失；而且还会使得阵列
+ * 的性能显著降低，当数据读/写时磁头在物理磁盘的多个分区上来回抖动带来长时间的
+ * 搜索耗时。
  */
 struct mddev {
 	/* 与 md personality 相关 */
@@ -335,19 +357,25 @@ struct mddev {
 	dev_t				unit;
 	/* md 设备的次设备号 */
 	int				md_minor;
+	/* 链表头，链接所有成员磁盘 */
 	struct list_head		disks;
 	unsigned long			flags;
 	unsigned long			sb_flags;
 
 	/* 如果为 1 ，表示 md 设备已经被挂起 */
 	int				suspended;
-	/* 计数器。发给 personality 处理前加 1 ，personality 处理结束后减 1 */
+	/*
+	 * 计数器。调用 mddev->pers->make_request 前加 1 ， make_request 返回后
+	 * 减 1 。 make_request 返回并不表明请求已经处理完，但至少说明请求已经
+	 * 交付给低层成员磁盘处理，或者已经被重定向到低层成员磁盘，已经和 MD 设
+	 * 备不相干了。
+	 */
 	struct percpu_ref		active_io;
 	/*
-	 * 取值为 0/1/2
+	 * 取值为 0/1/2 ，见 enum md_ro_state
 	 * 0: 可写
 	 * 1: 只读
-	 * 2: 只读，但在第一次写时自动转换为可写(即将元数据标记为脏)
+	 * 2: 只读，但在第一次写时自动转换为可写(即 将元数据标记为脏)
 	 */
 	int				ro;
 	int				sysfs_active; /* set when sysfs deletes
@@ -380,8 +408,9 @@ struct mddev {
 	int				external;	/* metadata is
 							 * managed externally */
 	/*
-	 * 当 external 为 1 时有效。反映元数据的类型。 sysfs 文件系统中 metadata
-	 * 属性文件的内容取决于 persistent,external,metadata_type 的值
+	 * 当 external 为 1 时有效。反映元数据的类型。 sysfs 文件系统中
+	 * metadata_version 属性文件的内容取决于 persistent,external,
+	 * metadata_type 的值
 	 */
 	char				metadata_type[17]; /* externally set*/
 	/*
@@ -389,6 +418,7 @@ struct mddev {
 	 * 型中的条带)，循环保存在成员磁盘上
 	 */
 	int				chunk_sectors;
+	/* MD 设备的创建时间和超级块的修改时间 */
 	time64_t			ctime, utime;
 	/*
 	 * layout 是 md 设备的布局，仅适用某些 raid 个性，例如 raid5 的向左/向右
@@ -463,36 +493,71 @@ struct mddev {
 	 * we are certain of.
 	 */
 	sector_t			curr_resync_completed;
+	/* 最近采集点的时间戳，用于计算同步速度的样本采集 */
 	unsigned long			resync_mark;	/* a recent timestamp */
+	/* 最近采集点的已同步块数，用于计算同步速度的样本采集 */
 	sector_t			resync_mark_cnt;/* blocks written at resync_mark */
+	/* 当前已调度的块数 */
 	sector_t			curr_mark_cnt; /* blocks scheduled now */
 
+	/* 所需要同步的最大扇区数 */
 	sector_t			resync_max_sectors; /* may be set by personality */
 
+	/* 检验和检查发现不一致的扇区数 */
 	atomic64_t			resync_mismatches; /* count of sectors where
 							    * parity/replica mismatch found
 							    */
 
 	/* allow user-space to request suspension of IO to regions of the array */
+	/*
+	 * 它和 suspend_hi 都为扇区编号，给出 raid 设备的一个范围，落在这个范围
+	 * 内的 IO 将被阻塞，当前仅被 raid4/5/6 支持
+	 */
 	sector_t			suspend_lo;
 	sector_t			suspend_hi;
 	/* if zero, use the system-wide default */
+	/*
+	 * 为了充分利用 CPU 资源，同时又不至于冲击正常 IO ，故设定一个保证同步
+	 * 速度的范围
+	 */
 	int				sync_speed_min;
 	int				sync_speed_max;
 
 	/* resync even though the same disks are shared among md-devices */
+	/*
+	 * 如果为 1 ，表示即使有其他共享相关的 raid 设备正在进行或准备开始同步
+	 * 时，也允许本 raid 设备的同步进行
+	 *
+	 * 如果判断两个 raid 设备是共享相关的？
+	 * 它们有成员磁盘属于同一个物理磁盘，比如是该物理磁盘的两个不同分区。
+	 */
 	int				parallel_resync;
 
+	/*
+	 * 如果某些 raid 设备既"脏"又降级，可能包含了没有被检测的数据损坏。因此，
+	 * 通过会拒绝启动这种设备。但如果此域为 1 ，表示将绕过检查，运行"脏"的
+	 * 降级阵列被启动起来
+	 */
 	int				ok_start_degraded;
 
+	/* 同步/恢复等标志 */
 	unsigned long			recovery;
 	/* If a RAID personality determines that recovery (of a particular
 	 * device) will fail due to a read error on the source device, it
 	 * takes a copy of this number and does not attempt recovery again
 	 * until this number changes.
 	 */
+	/*
+	 * 如果为 1 ，表示禁止恢复尝试。例如 raid1 设备只有一个成员磁盘，恢复没
+	 * 必要进行，因此会设置该域
+	 */
 	int				recovery_disabled;
 
+	/*
+	 * 如果为 1 ，表示这个 raid 处于同步状态，不需要同步。因为只有写操作才
+	 * 能导致条带不同步的情况(比如在没有同时写入数据单元和校验单元时掉电)，
+	 * 因此，在发起写操作的时候将该域清零，当所有单元都成功写入后，再次设置
+	 */
 	int				in_sync;	/* know to not need resync */
 	/* 'open_mutex' avoids races between 'md_open' and 'do_md_stop', so
 	 * that we are never stopping an array while it is open.
@@ -510,15 +575,29 @@ struct mddev {
 
 	int				changed;	/* True if we might need to
 							 * reread partition info */
+	/* 已经故障的成员磁盘数目 */
 	int				degraded;	/* whether md should consider
 							 * adding a spare
 							 */
 
+	/* 在提交同步请求时增加，在同步完成回调函数中减少 */
 	atomic_t			recovery_active; /* blocks scheduled, but not written */
+	/*
+	 * 在同步/恢复过程中，有时需要在此队列上等待，直到已经发起的同步/恢复请
+	 * 求完成
+	 */
 	wait_queue_head_t		recovery_wait;
+	/*
+	 * 记录上次同步到的位置，下次启动 raid 设备时可以从这个位置开始继续同步，
+	 * 而无须从头来过。为 MaxSector 表示没有进行同步或同步已完成。精确地说，
+	 * 这仅用于同步，恢复的当前位置被记录在要恢复的成员磁盘的
+	 * recovery_offset 域
+	 */
 	sector_t			recovery_cp;
+	/* 用户请求同步从这里开始 */
 	sector_t			resync_min;	/* user requested sync
 							 * starts here */
+	/* 用户请求同步到这里结束 */
 	sector_t			resync_max;	/* resync should pause
 							 * when it gets here */
 
@@ -530,6 +609,7 @@ struct mddev {
 	struct kernfs_node		*sysfs_degraded;	/*handle for 'degraded' */
 	struct kernfs_node		*sysfs_level;		/*handle for 'level' */
 
+	/* 用于延迟销毁此结构。为什么在销毁此结构时需要延迟？ */
 	struct work_struct del_work;	/* used for delayed sysfs removal */
 
 	/* "lock" protects:
@@ -544,14 +624,39 @@ struct mddev {
 	 *   setting MD_RECOVERY_RUNNING (which interacts with resync_{min,max})
 	 */
 	spinlock_t			lock;
+	/*
+	 * 要等待更新完成的进程将被挂在此队列上，更新回调函数负责唤醒。这个队列
+	 * 还用于其它等待目的，例如 MD 设备 suspend 需要等待所有发给 MD 个性的
+	 * IO 的完成，在屏障处理时后续请求需要等待屏障处理完成等。
+	 */
 	wait_queue_head_t		sb_wait;	/* for waiting on superblock updates */
 	atomic_t			pending_writes;	/* number of active superblock writes */
 
+	/*
+	 * 当 MD 阵列在一段时间没有看到写请求时，它将被标记为 clean 。在另一个
+	 * 写请求到来时，在写开始之前阵列被标记为 dirty 。这就是 safemod 域表示
+	 * 的安全模式，取值为 0/1/2 。如果被设置为 1 ，表示在一段时间没有待处理
+	 * 的写请求时(一般为几秒)，更新超级块，将它标记为 clean ，以减少在重启
+	 * 时将阵列被认作 dirty 的机会。在超级块更新，设置了 clean 标志后，又将
+	 * safemode 域清零。安全模式 2 也被称为"立即安全模式"，是上面的超时时间
+	 * 值为 0 的情况，也就是说，一旦没有等待处理的写请求，或所有当前写请求
+	 * 都已执行完成，就理解将 MD 阵列标记为 clean 。如果设置为 2 ，在没有待
+	 * 处理的写请求时更新 clean 超级块。
+	 */
 	unsigned int			safemode;	/* if set, update "clean" superblock
 							 * when no writes pending.
 							 */
+	/* 用于安全模式 1 的超时时间 */
 	unsigned int			safemode_delay;
+	/*
+	 * 用于安全模式 1 的定时器。在完成写请求后的 md_write_end 函数中设置，
+	 * 在开始写请求前的 md_write_start 函数中删除
+	 */
 	struct timer_list		safemode_timer;
+	/*
+	 * 正在处理的写请求数目。在开始写请求前的 md_write_start 函数中递增，在
+	 * 完成写请求后的 md_write_end 函数中递减
+	 */
 	struct percpu_ref		writes_pending;
 	int				sync_checkers;	/* # of threads checking writes_pending */
 	/* 与 gendisk.queue 指向相同的 request queue */
@@ -560,6 +665,10 @@ struct mddev {
 	struct bitmap			*bitmap; /* the bitmap for the device */
 	struct {
 		struct file		*file; /* the bitmap file */
+		/*
+		 * 位图起始位置相对于超级块的偏移。可以为负值，但不能为 0 。对
+		 * 于外部管理的元数据，为相对于设备开始的偏移
+		 */
 		loff_t			offset; /* offset from superblock of
 						 * start of bitmap. May be
 						 * negative, but not '0'
@@ -574,7 +683,16 @@ struct mddev {
 		unsigned long		default_space; /* space available at
 							* default offset */
 		struct mutex		mutex;
+		/*
+		 * 位图每一位表示 MD 设备一个 chunk 的同步情况，这个域记录
+		 * chunk 长度
+		 */
 		unsigned long		chunksize;
+		/*
+		 * 位图中设置的位可以延迟清零，因为位的清除并不是很关键，即使这
+		 * 个信息丢失，最多不过是多余的同步操作而已，没有副作用。位清零
+		 * 由后台进程负责，这个域记录了后台进程两次运行之间的间隔
+		 */
 		unsigned long		daemon_sleep; /* how many jiffies between updates? */
 		unsigned long		max_write_behind; /* write-behind mode */
 		int			external;
@@ -582,7 +700,9 @@ struct mddev {
 		char                    cluster_name[64]; /* Name of the cluster */
 	} bitmap_info;
 
+	/* 最大读重试次数 */
 	atomic_t			max_corr_read_errors; /* max read retries */
+	/* 链接到所有 MD 设备链表里 */
 	struct list_head		all_mddevs;
 
 	const struct attribute_group	*to_remove;
@@ -591,6 +711,7 @@ struct mddev {
 	struct bio_set			sync_set; /* for sync operations like
 						   * metadata and bitmap writes
 						   */
+	/* 用于分配 md_io_clone */
 	struct bio_set			io_clone_set;
 
 	/* Generic flush handling.
@@ -598,6 +719,7 @@ struct mddev {
 	 * the rest of the request (without the REQ_PREFLUSH flag).
 	 */
 	struct bio *flush_bio;
+	/* 等待处理的(针对成员磁盘)冲刷次数 */
 	atomic_t flush_pending;
 	ktime_t start_flush, prev_flush_start; /* prev_flush_start is when the previous completed
 						* flush was started.
@@ -702,6 +824,7 @@ struct md_personality
 	 * start up works that do NOT require md_thread. tasks that
 	 * requires md_thread should go into start()
 	 */
+	/* 如 raid5_run */
 	int (*run)(struct mddev *mddev);
 	/* start up works that require md threads */
 	int (*start)(struct mddev *mddev);
@@ -717,6 +840,7 @@ struct md_personality
 	/* 支持冗余特性的需要定义 */
 	sector_t (*sync_request)(struct mddev *mddev, sector_t sector_nr, int *skipped);
 	int (*resize) (struct mddev *mddev, sector_t sectors);
+	/* 如 raid5_size */
 	sector_t (*size) (struct mddev *mddev, sector_t sectors, int raid_disks);
 	int (*check_reshape) (struct mddev *mddev);
 	int (*start_reshape) (struct mddev *mddev);

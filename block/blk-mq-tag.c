@@ -130,6 +130,7 @@ unsigned long blk_mq_get_tags(struct blk_mq_alloc_data *data, int nr_tags,
 	return ret;
 }
 
+/* 获取 tag 。可能因当前无可用 tag 进入 iowait 状态 */
 unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 {
 	struct blk_mq_tags *tags = blk_mq_tags_from_data(data);

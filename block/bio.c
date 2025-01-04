@@ -1618,6 +1618,13 @@ EXPORT_SYMBOL(bio_endio);
  * to @bio's bi_io_vec. It is the caller's responsibility to ensure that
  * neither @bio nor @bs are freed before the split bio.
  */
+/*
+ * 会分裂成 前半部分(split) 和 后半部分(bio)
+ * 分裂三步曲：
+ *   bio_split
+ *   bio_chain
+ *   submit_bio_noacct(bio)提交后半部分，最终会链接到 前半部分 的后面
+ */
 struct bio *bio_split(struct bio *bio, int sectors,
 		      gfp_t gfp, struct bio_set *bs)
 {

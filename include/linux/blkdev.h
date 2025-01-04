@@ -145,6 +145,7 @@ struct gendisk {
 	/* 如 md_fops */
 	const struct block_device_operations *fops;
 	struct request_queue *queue;
+	/* 如 struct mddev */
 	void *private_data;
 
 	struct bio_set bio_split;
@@ -395,6 +396,7 @@ struct request_queue {
 	unsigned int		queue_depth;
 
 	/* hw dispatch queues */
+	/* 可以认为是(index, struct blk_mq_hw_ctx)的键值对。 index=[0, nr_hw_queues) */
 	struct xarray		hctx_table;
 	unsigned int		nr_hw_queues;
 
