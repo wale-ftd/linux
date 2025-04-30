@@ -3,6 +3,8 @@
 # Cryptographic API
 #
 
+CFLAGS_xor.o += -O
+
 obj-$(CONFIG_CRYPTO) += crypto.o
 crypto-y := api.o cipher.o compress.o
 

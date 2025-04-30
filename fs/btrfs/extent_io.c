@@ -2771,6 +2771,12 @@ free_eb:
 	btrfs_release_extent_buffer(eb);
 	return exists;
 }
+#else
+struct extent_buffer *alloc_test_extent_buffer(struct btrfs_fs_info *fs_info,
+					u64 start)
+{
+	return NULL;
+}
 #endif
 
 static struct extent_buffer *grab_extent_buffer(
